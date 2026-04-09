@@ -18,12 +18,31 @@
 
 | レイヤー | 技術 |
 |----------|------|
-| バックエンド | Python / FastAPI |
-| フロントエンド | HTML / CSS / Vanilla JS (FastAPI で静的配信) |
+| フロントエンド | **Python / Streamlit**（Azure Container Apps — 外部公開） |
+| バックエンド | Python / FastAPI（Azure Container Apps — **プライベートネットワーク**） |
+| ネットワーク | Azure VNet 統合 + 内部イングレス（フロントエンド→バックエンド間はプライベート） |
+| コンテナ管理 | Azure Container Apps + Azure Container Registry (ACR) |
 | 音声解析 | Azure AI Content Understanding |
 | 言語モデル | Azure OpenAI (GPT-4o) |
 | ストレージ | Azure Blob Storage |
-| インフラ | Terraform (Azure App Service) |
+| インフラ | Terraform |
+
+## ネットワーク構成
+
+```
+インターネット
+  │
+  ▼
+[Streamlit Frontend]  ← 外部イングレス（パブリック）
+  │  Azure Container Apps Environment（VNet統合）
+  │  プライベートネットワーク
+  ▼
+[FastAPI Backend]     ← 内部イングレスのみ（インターネット非公開）
+  │
+  ├─► Azure AI Content Understanding
+  ├─► Azure OpenAI
+  └─► Azure Blob Storage
+```
 
 ---
 
@@ -51,9 +70,9 @@
 │   ├── .env.example
 │   └── Dockerfile
 ├── frontend/
-│   ├── index.html                        # メイン UI
-│   ├── css/styles.css
-│   └── js/app.js
+│   ├── app.py                            # Streamlit アプリ
+│   ├── requirements.txt
+│   └── Dockerfile
 └── infra/
     ├── providers.tf
     ├── main.tf
@@ -61,9 +80,11 @@
     ├── outputs.tf
     ├── terraform.tfvars.example
     └── modules/
-        ├── ai_services/   # Azure OpenAI + Content Understanding
-        ├── storage/       # Azure Blob Storage
-        └── app_service/   # Azure App Service (Linux)
+        ├── ai_services/       # Azure OpenAI + Content Understanding
+        ├── storage/           # Azure Blob Storage
+        ├── networking/        # VNet + Container Apps サブネット
+        ├── container_registry/# Azure Container Registry (ACR)
+        └── container_apps/    # Container Apps Environment + frontend + backend
 ```
 
 ---
@@ -75,29 +96,30 @@
 - Python 3.12+
 - Azure サブスクリプション
 - Terraform 1.5+
-- Docker (コンテナデプロイの場合)
+- Docker + Azure CLI
 
 ### 1. ローカル開発
 
+**バックエンド:**
 ```bash
 cd backend
 pip install -r requirements.txt
-
-# 環境変数を設定
-cp .env.example .env
-# .env を編集して Azure の接続情報を入力
-
-# サーバーを起動（フロントエンドも / で配信されます）
+cp .env.example .env   # .env を編集して Azure の接続情報を入力
 uvicorn app.main:app --reload --port 8000
 ```
 
-ブラウザで `http://localhost:8000` を開いてください。
+**フロントエンド:**
+```bash
+cd frontend
+pip install -r requirements.txt
+BACKEND_URL=http://localhost:8000 streamlit run app.py
+```
 
 > **Note:** Azure の認証情報を設定しない場合、各エージェントはモックデータで動作します。
 
 ### 2. 環境変数
 
-`.env.example` を参考に `.env` を作成してください。
+`backend/.env.example` を参考に `.env` を作成してください。
 
 | 変数名 | 説明 |
 |--------|------|
@@ -110,7 +132,30 @@ uvicorn app.main:app --reload --port 8000
 | `AZURE_STORAGE_CONNECTION_STRING` | Azure Blob Storage 接続文字列 |
 | `AZURE_STORAGE_CONTAINER` | コンテナ名（デフォルト: `audio-files`） |
 
-### 3. Terraform でのインフラ構築
+フロントエンドの設定:
+
+| 変数名 | 説明 |
+|--------|------|
+| `BACKEND_URL` | バックエンドの URL（Container Apps では内部 URL が自動設定される） |
+| `POLL_INTERVAL_SECONDS` | ポーリング間隔（デフォルト: `2`） |
+
+### 3. Docker イメージのビルドと ACR へのプッシュ
+
+```bash
+# Terraform でインフラを構築してから実行
+ACR_NAME=$(terraform -chdir=infra output -raw acr_login_server)
+az acr login --name $ACR_NAME
+
+# バックエンド
+docker build -t ${ACR_NAME}/backend:latest ./backend
+docker push ${ACR_NAME}/backend:latest
+
+# フロントエンド
+docker build -t ${ACR_NAME}/frontend:latest ./frontend
+docker push ${ACR_NAME}/frontend:latest
+```
+
+### 4. Terraform でのインフラ構築
 
 ```bash
 cd infra
@@ -122,25 +167,17 @@ terraform plan
 terraform apply
 ```
 
-デプロイ後、`terraform output` で接続情報を確認できます。
-
-### 4. Docker でのビルド・実行
+デプロイ後、`terraform output` で接続情報を確認できます:
 
 ```bash
-# リポジトリルートで実行
-docker build -t meeting-minutes-agent ./backend
-
-docker run -p 8000:8000 \
-  -e AZURE_CU_ENDPOINT=... \
-  -e AZURE_CU_KEY=... \
-  -e AZURE_OPENAI_ENDPOINT=... \
-  -e AZURE_OPENAI_KEY=... \
-  meeting-minutes-agent
+terraform output frontend_url          # Streamlit の公開 URL
+terraform output backend_internal_url  # バックエンドの内部 URL（確認用）
+terraform output acr_login_server      # ACR ログインサーバー
 ```
 
 ---
 
-## API リファレンス
+## API リファレンス（バックエンド）
 
 ### POST `/api/v1/audio/upload`
 

@@ -3,9 +3,19 @@ output "resource_group_name" {
   value       = azurerm_resource_group.main.name
 }
 
-output "backend_url" {
-  description = "URL of the backend App Service"
-  value       = module.app_service.url
+output "frontend_url" {
+  description = "Public URL of the Streamlit frontend (Container App)"
+  value       = module.container_apps.frontend_url
+}
+
+output "backend_internal_url" {
+  description = "Internal (private) URL of the FastAPI backend — only reachable inside the VNet"
+  value       = module.container_apps.backend_internal_url
+}
+
+output "acr_login_server" {
+  description = "Azure Container Registry login server"
+  value       = module.container_registry.login_server
 }
 
 output "openai_endpoint" {
@@ -27,3 +37,9 @@ output "audio_container_name" {
   description = "Blob container for audio files"
   value       = module.storage.audio_container_name
 }
+
+output "vnet_id" {
+  description = "Virtual Network resource ID"
+  value       = module.networking.vnet_id
+}
+

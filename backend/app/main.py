@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 
 from app.routers import audio
 
@@ -16,7 +15,7 @@ logging.basicConfig(
 )
 
 app = FastAPI(
-    title="Meeting Minutes Agent",
+    title="Meeting Minutes Agent — Backend",
     description="音声ファイルから自動で議事録を生成するAPIサービス",
     version="1.0.0",
 )
@@ -31,7 +30,9 @@ app.add_middleware(
 
 app.include_router(audio.router, prefix="/api/v1")
 
-# Serve the frontend SPA from the /frontend directory when running locally.
-_frontend_dir = Path(__file__).parent.parent.parent / "frontend"
-if _frontend_dir.is_dir():
-    app.mount("/", StaticFiles(directory=str(_frontend_dir), html=True), name="frontend")
+
+@app.get("/health", include_in_schema=False)
+async def health() -> JSONResponse:
+    """Liveness probe endpoint for Container Apps."""
+    return JSONResponse({"status": "ok"})
+

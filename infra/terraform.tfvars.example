@@ -4,17 +4,29 @@ location            = "japaneast"
 environment         = "dev"
 app_name            = "mtgminutes"
 
+# Azure OpenAI
 openai_sku                 = "S0"
 openai_model_name          = "gpt-4o"
 openai_model_version       = "2024-05-13"
 openai_deployment_capacity = 30
 
+# Azure AI Content Understanding
 content_understanding_sku = "S0"
 
+# Storage
 storage_account_tier     = "Standard"
 storage_replication_type = "LRS"
 
-app_service_sku = "B2"
+# Networking
+vnet_address_space         = "10.0.0.0/16"
+container_apps_subnet_cidr = "10.0.0.0/23"
 
-# Set this to your container registry image once you've built and pushed the image.
-# docker_image = "myregistry.azurecr.io/meeting-minutes-agent:latest"
+# Container Registry
+acr_sku = "Basic"
+
+# Container Apps resource allocation
+backend_cpu     = 0.5
+backend_memory  = "1Gi"
+frontend_cpu    = 0.5
+frontend_memory = "1Gi"
+

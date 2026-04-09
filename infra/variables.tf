@@ -71,15 +71,52 @@ variable "storage_replication_type" {
   default     = "LRS"
 }
 
-# ── App Service ───────────────────────────────────────────────────────────────
-variable "app_service_sku" {
-  description = "App Service plan SKU"
+# ── Networking ────────────────────────────────────────────────────────────────
+variable "vnet_address_space" {
+  description = "CIDR block for the Virtual Network"
   type        = string
-  default     = "B2"
+  default     = "10.0.0.0/16"
 }
 
-variable "docker_image" {
-  description = "Docker image for the backend (e.g. myregistry.azurecr.io/meeting-minutes-agent:latest)"
+variable "container_apps_subnet_cidr" {
+  description = "CIDR block for the Container Apps subnet (minimum /23)"
   type        = string
-  default     = ""
+  default     = "10.0.0.0/23"
 }
+
+# ── Container Registry ────────────────────────────────────────────────────────
+variable "acr_sku" {
+  description = "SKU for Azure Container Registry"
+  type        = string
+  default     = "Basic"
+  validation {
+    condition     = contains(["Basic", "Standard", "Premium"], var.acr_sku)
+    error_message = "acr_sku must be Basic, Standard, or Premium"
+  }
+}
+
+# ── Container Apps ────────────────────────────────────────────────────────────
+variable "backend_cpu" {
+  description = "CPU allocation for the backend Container App (vCPU)"
+  type        = number
+  default     = 0.5
+}
+
+variable "backend_memory" {
+  description = "Memory allocation for the backend Container App"
+  type        = string
+  default     = "1Gi"
+}
+
+variable "frontend_cpu" {
+  description = "CPU allocation for the frontend (Streamlit) Container App (vCPU)"
+  type        = number
+  default     = 0.5
+}
+
+variable "frontend_memory" {
+  description = "Memory allocation for the frontend Container App"
+  type        = string
+  default     = "1Gi"
+}
+
