@@ -1,0 +1,20 @@
+# Copy this file to terraform.tfvars and fill in your values.
+resource_group_name = "rg-meeting-minutes-agent"
+location            = "japaneast"
+environment         = "dev"
+app_name            = "mtgminutes"
+
+openai_sku                 = "S0"
+openai_model_name          = "gpt-4o"
+openai_model_version       = "2024-05-13"
+openai_deployment_capacity = 30
+
+content_understanding_sku = "S0"
+
+storage_account_tier     = "Standard"
+storage_replication_type = "LRS"
+
+app_service_sku = "B2"
+
+# Set this to your container registry image once you've built and pushed the image.
+# docker_image = "myregistry.azurecr.io/meeting-minutes-agent:latest"

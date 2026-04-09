@@ -1,0 +1,10 @@
+variable "resource_group_name" { type = string }
+variable "location"            { type = string }
+variable "app_name"            { type = string }
+variable "environment"         { type = string }
+variable "openai_sku"          { type = string }
+variable "openai_model_name"   { type = string }
+variable "openai_model_version"{ type = string }
+variable "openai_deployment_capacity" { type = number }
+variable "content_understanding_sku"  { type = string }
+variable "tags"                { type = map(string) }
