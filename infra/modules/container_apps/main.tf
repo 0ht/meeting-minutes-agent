@@ -26,6 +26,17 @@ resource "azurerm_container_app_environment" "main" {
   # false = external environment (required to allow the frontend to be public)
   internal_load_balancer_enabled = false
   tags                           = var.tags
+
+  workload_profile {
+    name                  = "Consumption"
+    workload_profile_type = "Consumption"
+  }
+
+  lifecycle {
+    # azurerm 4.x re-reads infrastructure_resource_group_name as null on
+    # Consumption-only environments and would force replacement otherwise.
+    ignore_changes = [infrastructure_resource_group_name]
+  }
 }
 
 # ── Backend Container App — internal ingress only ─────────────────────────────
@@ -34,7 +45,12 @@ resource "azurerm_container_app" "backend" {
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = var.resource_group_name
   revision_mode                = "Single"
+  workload_profile_name        = "Consumption"
   tags                         = var.tags
+
+  identity {
+    type = "SystemAssigned"
+  }
 
   registry {
     server               = var.acr_login_server
@@ -49,9 +65,9 @@ resource "azurerm_container_app" "backend" {
 
   # Additional secrets (API keys, connection strings, …)
   dynamic "secret" {
-    for_each = var.backend_secrets
+    for_each = nonsensitive(var.backend_secrets)
     content {
-      name  = replace(secret.key, "_", "-")
+      name  = lower(replace(secret.key, "_", "-"))
       value = secret.value
     }
   }
@@ -88,10 +104,10 @@ resource "azurerm_container_app" "backend" {
 
       # Secret env vars — reference by secret name
       dynamic "env" {
-        for_each = var.backend_secrets
+        for_each = nonsensitive(var.backend_secrets)
         content {
           name        = env.key
-          secret_name = replace(env.key, "_", "-")
+          secret_name = lower(replace(env.key, "_", "-"))
         }
       }
 
@@ -113,6 +129,7 @@ resource "azurerm_container_app" "frontend" {
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = var.resource_group_name
   revision_mode                = "Single"
+  workload_profile_name        = "Consumption"
   tags                         = var.tags
 
   registry {

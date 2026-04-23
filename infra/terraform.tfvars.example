@@ -10,8 +10,8 @@ openai_model_name          = "gpt-4o"
 openai_model_version       = "2024-05-13"
 openai_deployment_capacity = 30
 
-# Azure AI Content Understanding
-content_understanding_sku = "S0"
+# Azure Speech (Fast Transcription)
+speech_sku = "S0"
 
 # Storage
 storage_account_tier     = "Standard"

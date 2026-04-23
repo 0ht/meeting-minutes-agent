@@ -27,3 +27,8 @@ output "log_analytics_workspace_id" {
   description = "Log Analytics Workspace resource ID"
   value       = azurerm_log_analytics_workspace.main.id
 }
+
+output "backend_principal_id" {
+  description = "System-assigned Managed Identity principal ID of the backend Container App"
+  value       = azurerm_container_app.backend.identity[0].principal_id
+}

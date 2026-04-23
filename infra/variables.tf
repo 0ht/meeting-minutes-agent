@@ -34,15 +34,15 @@ variable "openai_sku" {
 }
 
 variable "openai_model_name" {
-  description = "Azure OpenAI model to deploy (e.g. gpt-4o)"
+  description = "Azure OpenAI model to deploy (e.g. gpt-5.4)"
   type        = string
-  default     = "gpt-4o"
+  default     = "gpt-5.4"
 }
 
 variable "openai_model_version" {
   description = "Version of the Azure OpenAI model"
   type        = string
-  default     = "2024-05-13"
+  default     = "2026-03-05"
 }
 
 variable "openai_deployment_capacity" {
@@ -51,9 +51,9 @@ variable "openai_deployment_capacity" {
   default     = 30
 }
 
-# ── Azure AI Content Understanding ──────────────────────────────────────────
-variable "content_understanding_sku" {
-  description = "SKU for the Azure AI Content Understanding (Cognitive Services) resource"
+# ── Azure Speech (Fast Transcription) ─────────────────────────────────────────
+variable "speech_sku" {
+  description = "SKU for the Azure Speech (Cognitive Services) resource"
   type        = string
   default     = "S0"
 }
@@ -118,5 +118,37 @@ variable "frontend_memory" {
   description = "Memory allocation for the frontend Container App"
   type        = string
   default     = "1Gi"
+}
+
+# ── Container images ──────────────────────────────────────────────────────────
+variable "backend_image_repo" {
+  description = "ACR repository name for the backend image (without registry/tag)"
+  type        = string
+  default     = "meeting-minutes-backend"
+}
+
+variable "backend_image_tag" {
+  description = "Tag for the backend container image"
+  type        = string
+  default     = "latest"
+}
+
+variable "frontend_image_repo" {
+  description = "ACR repository name for the frontend image (without registry/tag)"
+  type        = string
+  default     = "meeting-minutes-frontend"
+}
+
+variable "frontend_image_tag" {
+  description = "Tag for the frontend container image"
+  type        = string
+  default     = "latest"
+}
+
+# ── Tagging ───────────────────────────────────────────────────────────────────
+variable "tag_environment" {
+  description = "Value used for the 'environment' resource tag (independent of var.environment which controls resource naming)."
+  type        = string
+  default     = "dev"
 }
 

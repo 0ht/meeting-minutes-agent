@@ -6,5 +6,5 @@ variable "openai_sku"          { type = string }
 variable "openai_model_name"   { type = string }
 variable "openai_model_version"{ type = string }
 variable "openai_deployment_capacity" { type = number }
-variable "content_understanding_sku"  { type = string }
+variable "speech_sku"                  { type = string }
 variable "tags"                { type = map(string) }

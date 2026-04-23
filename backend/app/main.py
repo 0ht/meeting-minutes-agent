@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.routers import audio
+from app.routers import audio, history
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +29,7 @@ app.add_middleware(
 )
 
 app.include_router(audio.router, prefix="/api/v1")
+app.include_router(history.router, prefix="/api/v1")
 
 
 @app.get("/health", include_in_schema=False)

@@ -37,8 +37,14 @@ class MinutesResult(BaseModel):
     date: Optional[str] = None
     participants: List[str]
     summary: str
-    decisions: List[str]
-    action_items: List[dict]   # {"owner": str, "task": str, "due": str|None}
+    # New structure: agenda topics, each with a brief summary and a few detail bullets.
+    # {"title": str, "summary": str, "details": [str]}
+    topics: List[dict] = []
+    # Follow-up tasks (Teams-style). {"task": str, "owner": str|None, "due": str|None}
+    follow_up_tasks: List[dict] = []
+    # Legacy fields kept for backwards compatibility.
+    decisions: List[str] = []
+    action_items: List[dict] = []   # {"owner": str, "task": str, "due": str|None}
     next_meeting: Optional[str] = None
     raw_markdown: str
 
@@ -50,6 +56,13 @@ class TerminologyEnhancedResult(BaseModel):
 
 
 # ── API request / response ────────────────────────────────────────────────────
+
+class TranscriptRequest(BaseModel):
+    """Request body for submitting a pre-existing transcript."""
+    transcript: str
+    speakers: Optional[List[str]] = None
+    language: Optional[str] = "ja"
+
 
 class JobResponse(BaseModel):
     job_id: str

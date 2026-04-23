@@ -2,7 +2,7 @@
 
 Pipeline:
   Audio bytes
-    → ContentUnderstandingAgent  → ContentAnalysisResult
+    → SpeechTranscriptionAgent   → ContentAnalysisResult
     → ScriptAgent                → ScriptResult
     → MinutesAgent               → MinutesResult
     → TerminologyAgent           → TerminologyEnhancedResult
@@ -14,7 +14,8 @@ import logging
 import uuid
 from typing import Dict
 
-from app.agents.content_understanding import ContentUnderstandingAgent
+from app.agents.speech_transcription import SpeechTranscriptionAgent
+from app.agents import history_store
 from app.agents.minutes_agent import MinutesAgent
 from app.agents.script_agent import ScriptAgent
 from app.agents.terminology_agent import TerminologyAgent
@@ -56,15 +57,35 @@ async def get_job(job_id: str) -> JobResultResponse | None:
         return _jobs.get(job_id)
 
 
-async def run_pipeline(job_id: str, audio_bytes: bytes, filename: str) -> None:
-    """Run the full agent pipeline in the background for *job_id*."""
-    await _update_job(job_id, status=JobStatus.processing, message="音声ファイルを解析中...")
+async def run_pipeline(
+    job_id: str,
+    audio_bytes: bytes | None = None,
+    filename: str = "audio.wav",
+    transcript: ContentAnalysisResult | None = None,
+) -> None:
+    """Run the full agent pipeline in the background for *job_id*.
+
+    Either *audio_bytes* or *transcript* must be supplied. If *transcript* is
+    given, Step 1 (Speech Transcription) is skipped.
+    """
+    if transcript is None and audio_bytes is None:
+        raise ValueError("Either audio_bytes or transcript must be provided.")
+
+    await _update_job(
+        job_id,
+        status=JobStatus.processing,
+        message="音声ファイルを解析中..." if transcript is None else "スクリプトを生成中...",
+    )
 
     try:
-        # ── Step 1: Content Understanding ────────────────────────────────────
-        logger.info("[%s] Step 1: Content Understanding", job_id)
-        cu_agent = ContentUnderstandingAgent()
-        content: ContentAnalysisResult = await cu_agent.analyze(audio_bytes, filename)
+        # ── Step 1: Speech Transcription ──────────────────────────────────────
+        if transcript is not None:
+            logger.info("[%s] Step 1: Skipped (transcript provided)", job_id)
+            content = transcript
+        else:
+            logger.info("[%s] Step 1: Speech Transcription", job_id)
+            speech_agent = SpeechTranscriptionAgent()
+            content = await speech_agent.analyze(audio_bytes, filename)  # type: ignore[arg-type]
         await _update_job(
             job_id,
             content_analysis=content,
@@ -102,6 +123,34 @@ async def run_pipeline(job_id: str, audio_bytes: bytes, filename: str) -> None:
             message="完了しました",
         )
         logger.info("[%s] Pipeline complete", job_id)
+
+        # ── Persist to history (best-effort; failure is non-fatal) ────────────
+        try:
+            job = await get_job(job_id)
+            if job is not None:
+                if transcript is not None:
+                    input_kind = "transcript"
+                    input_filename = "transcript.txt"
+                    input_payload = (transcript.raw_transcript or "").encode("utf-8")
+                else:
+                    input_kind = "audio"
+                    input_filename = filename or "audio.wav"
+                    input_payload = audio_bytes or b""
+                title = (
+                    minutes.title
+                    if getattr(minutes, "title", None)
+                    else f"議事録 {job_id[:8]}"
+                )
+                await history_store.save_job(
+                    job_id=job_id,
+                    job_payload=job.model_dump(mode="json"),
+                    input_kind=input_kind,
+                    input_filename=input_filename,
+                    input_bytes=input_payload,
+                    title=title,
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[%s] Failed to archive job to history: %s", job_id, exc)
 
     except Exception as exc:  # noqa: BLE001
         logger.exception("[%s] Pipeline failed: %s", job_id, exc)

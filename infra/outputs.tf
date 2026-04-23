@@ -18,14 +18,19 @@ output "acr_login_server" {
   value       = module.container_registry.login_server
 }
 
-output "openai_endpoint" {
-  description = "Azure OpenAI endpoint"
-  value       = module.ai_services.openai_endpoint
+output "foundry_account_endpoint" {
+  description = "Foundry (AI Services) account endpoint"
+  value       = module.ai_services.foundry_account_endpoint
 }
 
-output "content_understanding_endpoint" {
-  description = "Azure AI Content Understanding endpoint"
-  value       = module.ai_services.content_understanding_endpoint
+output "foundry_project_endpoint" {
+  description = "Foundry project endpoint (used by AIProjectClient)"
+  value       = module.ai_services.foundry_project_endpoint
+}
+
+output "speech_endpoint" {
+  description = "Azure Speech (CognitiveServices) endpoint for Fast Transcription"
+  value       = module.ai_services.speech_endpoint
 }
 
 output "storage_account_name" {

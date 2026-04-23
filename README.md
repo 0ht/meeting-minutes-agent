@@ -8,7 +8,7 @@
 
 ```
 音声ファイル
-  └─► [Content Understanding エージェント]  … 文字起こし・構造化データ抽出
+  └─► [音声解析エージェント]              … Azure Speech Fast Transcription で文字起こし（話者分離対応）
         └─► [スクリプト生成エージェント]     … 読みやすい会議スクリプトを作成
               └─► [議事録作成エージェント]   … 決定事項・アクションアイテム等を整理
                     └─► [用語補足エージェント] … 業界/社内用語の用語集を付加
@@ -22,8 +22,9 @@
 | バックエンド | Python / FastAPI（Azure Container Apps — **プライベートネットワーク**） |
 | ネットワーク | Azure VNet 統合 + 内部イングレス（フロントエンド→バックエンド間はプライベート） |
 | コンテナ管理 | Azure Container Apps + Azure Container Registry (ACR) |
-| 音声解析 | Azure AI Content Understanding |
-| 言語モデル | Azure OpenAI (GPT-4o) |
+| 音声解析 | Azure Speech Fast Transcription API（話者分離対応） |
+| 言語モデル | Azure OpenAI (GPT-5.4) |
+| 認証 | Managed Identity（DefaultAzureCredential） |
 | ストレージ | Azure Blob Storage |
 | インフラ | Terraform |
 
@@ -39,10 +40,12 @@
   ▼
 [FastAPI Backend]     ← 内部イングレスのみ（インターネット非公開）
   │
-  ├─► Azure AI Content Understanding
+  ├─► Azure Speech Service（Fast Transcription API）
   ├─► Azure OpenAI
   └─► Azure Blob Storage
 ```
+
+> **認証**: すべての Azure サービスへの接続は Managed Identity (DefaultAzureCredential) を使用します。API キーは不要です。
 
 ---
 
@@ -55,7 +58,7 @@
 │   │   ├── main.py                       # FastAPI エントリポイント
 │   │   ├── config.py                     # 設定（環境変数）
 │   │   ├── agents/
-│   │   │   ├── content_understanding.py  # Azure AI Content Understanding エージェント
+│   │   │   ├── speech_transcription.py   # Azure Speech Fast Transcription エージェント
 │   │   │   ├── script_agent.py           # スクリプト生成エージェント
 │   │   │   ├── minutes_agent.py          # 議事録作成エージェント
 │   │   │   ├── terminology_agent.py      # 用語補足エージェント
@@ -80,12 +83,24 @@
     ├── outputs.tf
     ├── terraform.tfvars.example
     └── modules/
-        ├── ai_services/       # Azure OpenAI + Content Understanding
+        ├── ai_services/       # Azure OpenAI + Cognitive Services (Speech)
         ├── storage/           # Azure Blob Storage
         ├── networking/        # VNet + Container Apps サブネット
         ├── container_registry/# Azure Container Registry (ACR)
         └── container_apps/    # Container Apps Environment + frontend + backend
 ```
+
+---
+
+## 機能
+
+### 議事録生成パイプライン
+
+4 つの AI エージェントが順次処理を行い、高品質な議事録を生成します。
+
+### エージェント詳細パネル
+
+処理中画面・結果画面で「🔍 エージェント詳細パネル」トグルをONにすると、右側にパネルが表示され、各エージェントの入力・出力データをリアルタイムで確認できます。
 
 ---
 
@@ -123,14 +138,13 @@ BACKEND_URL=http://localhost:8000 streamlit run app.py
 
 | 変数名 | 説明 |
 |--------|------|
-| `AZURE_CU_ENDPOINT` | Azure AI Content Understanding エンドポイント |
-| `AZURE_CU_KEY` | Azure AI Content Understanding APIキー |
-| `AZURE_CU_ANALYZER_ID` | アナライザーID（デフォルト: `prebuilt-audioAnalyzer`） |
+| `AZURE_SPEECH_ENDPOINT` | Azure Cognitive Services エンドポイント（Speech API 用） |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI エンドポイント |
-| `AZURE_OPENAI_KEY` | Azure OpenAI APIキー |
-| `AZURE_OPENAI_DEPLOYMENT` | デプロイメント名（デフォルト: `gpt-4o`） |
-| `AZURE_STORAGE_CONNECTION_STRING` | Azure Blob Storage 接続文字列 |
+| `AZURE_OPENAI_DEPLOYMENT` | デプロイメント名（デフォルト: `gpt-5.4`） |
+| `AZURE_STORAGE_ACCOUNT_URL` | Azure Blob Storage アカウント URL |
 | `AZURE_STORAGE_CONTAINER` | コンテナ名（デフォルト: `audio-files`） |
+
+> **Note:** API キーは不要です。ローカル開発では `az login` 済みの状態で `DefaultAzureCredential` が自動的にトークンを取得します。Azure 上では Managed Identity が使用されます。
 
 フロントエンドの設定:
 
@@ -144,15 +158,10 @@ BACKEND_URL=http://localhost:8000 streamlit run app.py
 ```bash
 # Terraform でインフラを構築してから実行
 ACR_NAME=$(terraform -chdir=infra output -raw acr_login_server)
-az acr login --name $ACR_NAME
 
-# バックエンド
-docker build -t ${ACR_NAME}/backend:latest ./backend
-docker push ${ACR_NAME}/backend:latest
-
-# フロントエンド
-docker build -t ${ACR_NAME}/frontend:latest ./frontend
-docker push ${ACR_NAME}/frontend:latest
+# ACR ビルド（ビルドはクラウド上で実行されるためローカルの Docker 不要）
+az acr build --registry $ACR_NAME --image backend:latest ./backend
+az acr build --registry $ACR_NAME --image frontend:latest ./frontend
 ```
 
 ### 4. Terraform でのインフラ構築
@@ -174,6 +183,16 @@ terraform output frontend_url          # Streamlit の公開 URL
 terraform output backend_internal_url  # バックエンドの内部 URL（確認用）
 terraform output acr_login_server      # ACR ログインサーバー
 ```
+
+### 5. RBAC ロール割り当て（Terraform で自動設定）
+
+バックエンドの Managed Identity に以下のロールが自動的に割り当てられます:
+
+| ロール | 対象リソース | 用途 |
+|--------|-------------|------|
+| Cognitive Services User | Speech (CU) リソース | 音声文字起こし API |
+| Cognitive Services OpenAI User | OpenAI リソース | GPT モデル呼び出し |
+| Storage Blob Data Contributor | ストレージアカウント | 音声ファイルの保存 |
 
 ---
 

@@ -55,6 +55,8 @@ infra/terraform.tfstate.backup
 infra/*.tfvars
 !infra/terraform.tfvars.example
 infra/.terraform.tfstate.lock.info
+infra/tfplan
+infra/tfplan.*
 
 # Uploaded files / temp
 backend/uploads/

@@ -15,29 +15,55 @@ import json
 import logging
 from datetime import date
 
-from openai import AsyncAzureOpenAI
-
+from app.agents.foundry_client import get_agents_client
+from app.agents.terminology_tools import run_foundry_agent
 from app.config import get_settings
 from app.models.schemas import MinutesResult, ScriptResult
 
 logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """あなたは会議の議事録を作成するプロフェッショナルアシスタントです。
-提供された会議スクリプトをもとに、正式な議事録を作成してください。
+提供された会議スクリプトをもとに、Teams 風の構造化された議事録を作成してください。
+
+【用語の取り扱い】
+議事録に登場する専門用語・社内用語・略語については、必ず `lookup_terminology`
+ツールを呼び出して正式表記 (canonical) と定義 (definition) を取得してください。
+- 1 度のツール呼び出しで複数語をまとめて渡してよい（最大 50 件、最大 3 回まで）。
+- ツールが定義を返した語は、初出箇所で「正式表記（補足: 定義）」のインライン注釈を
+  本文 (raw_markdown / details) に付与する。例: `MCP（Model Context Protocol。AI とデータソース接続の標準規約）`。
+- 同じ語が複数回出ても、注釈は初出のみで十分。
+- ツールが空配列を返した語は注釈しない。
 
 必ず以下の JSON 形式で出力してください。マークダウンコードブロックは不要です：
 {
   "title": "会議タイトル",
   "date": "YYYY-MM-DD（スクリプトから推定できない場合はnull）",
   "participants": ["参加者1", "参加者2"],
-  "summary": "会議全体の要約（3〜5文）",
-  "decisions": ["決定事項1", "決定事項2"],
-  "action_items": [
-    {"owner": "担当者名", "task": "タスク内容", "due": "期限（任意）"}
+  "summary": "会議全体の概要（簡潔に2〜3文）",
+  "topics": [
+    {
+      "title": "トピックの見出し（1行・体言止め可）",
+      "summary": "そのトピックで何が話されたかの簡潔な要約（1〜2文）",
+      "details": [
+        "議論の要点を3〜6行程度の箇条書きでまとめる",
+        "誰が何を主張・説明・決定したかを含める",
+        "数値・固有名詞・期日などは具体的に記載する"
+      ]
+    }
+  ],
+  "follow_up_tasks": [
+    {"task": "タスク内容", "owner": "担当者名（不明ならnull）", "due": "期限（任意）"}
   ],
   "next_meeting": "次回会議の日程（任意）",
-  "raw_markdown": "Markdown形式の完全な議事録"
+  "raw_markdown": "Markdown形式の完全な議事録（用語インライン注釈済み）"
 }
+
+ガイドライン：
+- summary は冗長にせず、2〜3文で会議の目的・主要結論を端的に述べてください。
+- topics には会議で扱われた主要なアジェンダを順序通り抽出してください（通常 3〜8 件）。
+- details はトピックごとに 3〜6 行程度の簡潔な箇条書きで、何が話されたかが分かるようにしてください。
+- 決定事項は該当トピックの details 内に記載するか、follow_up_tasks に展開してください（独立セクションは不要）。
+- follow_up_tasks は Teams の「フォローアップ タスク」相当で、タスク・担当者を明記してください。
 
 raw_markdown は以下の構造にしてください：
 # [会議タイトル]
@@ -45,18 +71,20 @@ raw_markdown は以下の構造にしてください：
 **参加者：** [参加者]
 
 ## 概要
-[要約]
+[2〜3文の簡潔な概要]
 
-## 決定事項
-- [決定事項リスト]
+## 議事
+### [トピック1のタイトル]
+[トピックの要約1〜2文]
+- [詳細1]
+- [詳細2]
+- [詳細3]
 
-## アクションアイテム
-| 担当者 | タスク | 期限 |
-|--------|--------|------|
-| ...    | ...    | ...  |
+### [トピック2のタイトル]
+...
 
-## 次回会議
-[次回会議情報]
+## フォローアップ タスク
+- **[タスク内容]** — 担当: [担当者]（期限: [期限]）
 """
 
 
@@ -68,15 +96,9 @@ class MinutesAgent:
 
     async def generate(self, script: ScriptResult) -> MinutesResult:
         """Generate meeting minutes from *script*."""
-        if not self.settings.azure_openai_endpoint or not self.settings.azure_openai_key:
-            logger.warning("Azure OpenAI credentials not configured — returning mock minutes.")
+        if get_agents_client() is None:
+            logger.warning("Foundry project not configured — returning mock minutes.")
             return self._mock_result(script)
-
-        client = AsyncAzureOpenAI(
-            azure_endpoint=self.settings.azure_openai_endpoint,
-            api_key=self.settings.azure_openai_key,
-            api_version=self.settings.azure_openai_api_version,
-        )
 
         user_message = (
             f"【参加者】{', '.join(script.participants)}\n"
@@ -84,23 +106,21 @@ class MinutesAgent:
             f"【会議スクリプト】\n{script.script}"
         )
 
-        response = await client.chat.completions.create(
-            model=self.settings.azure_openai_deployment,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_message},
-            ],
-            temperature=0.3,
+        raw = await run_foundry_agent(
+            agent_key="minutes",
+            name="meeting-minutes-agent",
+            instructions=SYSTEM_PROMPT,
+            user_message=user_message,
             response_format={"type": "json_object"},
         )
-
-        raw = response.choices[0].message.content or "{}"
-        data = json.loads(raw)
+        data = json.loads(raw or "{}")
         return MinutesResult(
             title=data.get("title", "会議議事録"),
             date=data.get("date"),
             participants=data.get("participants", script.participants),
             summary=data.get("summary", ""),
+            topics=data.get("topics", []),
+            follow_up_tasks=data.get("follow_up_tasks", data.get("action_items", [])),
             decisions=data.get("decisions", []),
             action_items=data.get("action_items", []),
             next_meeting=data.get("next_meeting"),
@@ -112,47 +132,68 @@ class MinutesAgent:
     @staticmethod
     def _mock_result(script: ScriptResult) -> MinutesResult:
         today = date.today().isoformat()
+        topics = [
+            {
+                "title": "新製品ロードマップの確認",
+                "summary": "新製品の開発状況とリリース計画について議論した。",
+                "details": [
+                    "AI自動要約機能の開発が予定通り進行していることを確認",
+                    "リリース時期を来月末に設定",
+                    "テスト工程は2週間後から開始することで合意",
+                ],
+            },
+            {
+                "title": "Q3 売上目標と次回会議",
+                "summary": "Q3 の売上目標と次回ミーティングのスケジュールを確認した。",
+                "details": [
+                    "Q3 売上目標は前期比 110% を目指す",
+                    "次回会議を来月15日に設定",
+                ],
+            },
+        ]
+        follow_up = [
+            {"task": "AI自動要約機能の開発完了", "owner": "田中", "due": "来月末"},
+            {"task": "テスト環境の準備", "owner": "田中", "due": "2週間後"},
+            {"task": "次回会議の案内送付", "owner": "司会", "due": "今週中"},
+        ]
+        topics_md = "\n\n".join(
+            f"### {t['title']}\n{t['summary']}\n"
+            + "\n".join(f"- {d}" for d in t["details"])
+            for t in topics
+        )
+        tasks_md = "\n".join(
+            f"- **{t['task']}** — 担当: {t['owner']}（期限: {t['due']}）"
+            for t in follow_up
+        )
         markdown = f"""# 新製品ロードマップ検討会議
-**日時：** {today}
+**日時：** {today}  
 **参加者：** {', '.join(script.participants)}
 
 ## 概要
-本日の会議では、新製品のロードマップとQ3の売上目標について議論しました。AIを活用した自動要約機能の開発状況と今後のスケジュールを確認しました。
+新製品ロードマップと Q3 売上目標を確認し、AI自動要約機能のリリース計画を合意した。
 
-## 決定事項
-- AI自動要約機能を来月末にリリースする
-- テストは2週間後から開始する
-- 次回会議を来月15日に設定する
+## 議事
+{topics_md}
 
-## アクションアイテム
-| 担当者 | タスク | 期限 |
-|--------|--------|------|
-| 田中 | AI自動要約機能の開発完了 | 来月末 |
-| 田中 | テスト環境の準備 | 2週間後 |
-| 司会 | 次回会議の案内送付 | 今週中 |
-
-## 次回会議
-来月15日（詳細は別途案内）
+## フォローアップ タスク
+{tasks_md}
 """
         return MinutesResult(
             title="新製品ロードマップ検討会議",
             date=today,
             participants=script.participants,
             summary=(
-                "本日の会議では、新製品のロードマップとQ3の売上目標について議論しました。"
-                "AIを活用した自動要約機能の開発状況と今後のスケジュールを確認しました。"
-                "来月末のリリースに向けてテストを2週間後から開始することが決定しました。"
+                "新製品ロードマップと Q3 売上目標を確認し、"
+                "AI自動要約機能を来月末にリリースすることで合意した。"
             ),
+            topics=topics,
+            follow_up_tasks=follow_up,
             decisions=[
                 "AI自動要約機能を来月末にリリースする",
                 "テストは2週間後から開始する",
                 "次回会議を来月15日に設定する",
             ],
-            action_items=[
-                {"owner": "田中", "task": "AI自動要約機能の開発完了", "due": "来月末"},
-                {"owner": "田中", "task": "テスト環境の準備", "due": "2週間後"},
-                {"owner": "司会", "task": "次回会議の案内送付", "due": "今週中"},
-            ],
+            action_items=follow_up,
             next_meeting="来月15日",
             raw_markdown=markdown,
         )

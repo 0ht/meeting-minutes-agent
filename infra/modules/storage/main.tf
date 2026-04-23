@@ -9,6 +9,7 @@ resource "azurerm_storage_account" "main" {
   location                 = var.location
   account_tier             = var.storage_account_tier
   account_replication_type = var.storage_replication_type
+  shared_access_key_enabled = false
   tags                     = var.tags
 
   blob_properties {
@@ -23,6 +24,22 @@ resource "azurerm_storage_account" "main" {
 
 resource "azurerm_storage_container" "audio" {
   name                  = "audio-files"
+  storage_account_name  = azurerm_storage_account.main.name
+  container_access_type = "private"
+}
+
+# Container holding the terminology dictionary (terminology.json) consumed by
+# the Foundry agents via the lookup_terminology tool.
+resource "azurerm_storage_container" "terms" {
+  name                  = "terms"
+  storage_account_name  = azurerm_storage_account.main.name
+  container_access_type = "private"
+}
+
+# Container persisting meeting-minutes generation history
+# (input file + job.json with results) for later retrieval/download.
+resource "azurerm_storage_container" "history" {
+  name                  = "history"
   storage_account_name  = azurerm_storage_account.main.name
   container_access_type = "private"
 }
