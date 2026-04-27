@@ -33,7 +33,7 @@
 
 | 機能 | 説明 |
 |------|------|
-| 音声アップロード | WAV/MP3/MP4/OGG/WebM/FLAC 形式に対応（最大 100MB） |
+| 音声アップロード | WAV/MP3/MP4/M4A/OGG/WebM/FLAC 形式に対応（最大 100MB） |
 | テキスト入力 | 文字起こし済みテキスト / VTT / SRT / DOCX ファイルの直接投入 |
 | 話者分離 | Azure Speech Fast Transcription による最大 10 名の話者識別 |
 | 4 段パイプライン | 音声解析 → スクリプト整形 → 議事録生成 → 用語補足 |
@@ -145,13 +145,16 @@ graph TD
 | History | `/api/v1` | `routers/history.py` |
 
 **主要依存**:
-- `fastapi`, `uvicorn`, `pydantic`, `pydantic-settings`
+- `fastapi`, `uvicorn`, `pydantic`, `pydantic-settings`, `python-multipart`
 - `openai` (2.0+) — Responses API 経由で Foundry Agent を呼び出し
 - `azure-ai-projects` (2.1+) — Foundry Project / Agent 管理
 - `azure-ai-agents` (1.1+) — AgentsClient
 - `azure-identity` — DefaultAzureCredential
 - `azure-storage-blob` — Blob Storage 接続
 - `httpx` — Speech Fast Transcription API 呼び出し
+- `pydub` — 音声ファイルの正規化（16 kHz/16-bit/mono WAV リサンプル、ffmpeg 必須）
+- `aiofiles` — 非同期ファイル I/O
+- `aiohttp` — 非同期 HTTP クライアント
 
 ### 3.3 エージェントモジュール (`backend/app/agents/`)
 
@@ -190,6 +193,7 @@ sequenceDiagram
 
     rect rgb(232, 244, 253)
         Note over BE,Speech: Step 1: 音声解析
+        Note over BE: pydub で 16kHz/16bit/mono WAV に正規化
         BE->>Speech: Fast Transcription API (話者分離)
         Speech-->>BE: ContentAnalysisResult
     end
@@ -804,12 +808,25 @@ az storage blob upload \
 | `location` | `japaneast` | Azure リージョン |
 | `environment` | `dev` | デプロイ環境 (dev/staging/prod) |
 | `app_name` | `mtgminutes` | リソース名ベース |
+| `openai_sku` | `S0` | Azure OpenAI SKU |
 | `openai_model_name` | `gpt-5.4` | GPT モデル名 |
+| `openai_model_version` | `2026-03-05` | GPT モデルバージョン |
 | `openai_deployment_capacity` | `30` | TPM 容量 (千単位) |
+| `speech_sku` | `S0` | Azure Speech SKU |
+| `storage_account_tier` | `Standard` | ストレージアカウントティア |
+| `storage_replication_type` | `LRS` | ストレージレプリケーション種別 |
 | `vnet_address_space` | `10.0.0.0/16` | VNet CIDR |
 | `container_apps_subnet_cidr` | `10.0.0.0/23` | CA サブネット CIDR |
+| `acr_sku` | `Basic` | ACR SKU (Basic/Standard/Premium) |
+| `backend_cpu` | `0.5` | Backend vCPU 割り当て |
+| `backend_memory` | `1Gi` | Backend メモリ割り当て |
+| `frontend_cpu` | `0.5` | Frontend vCPU 割り当て |
+| `frontend_memory` | `1Gi` | Frontend メモリ割り当て |
+| `backend_image_repo` | `meeting-minutes-backend` | Backend ACR リポジトリ名 |
 | `backend_image_tag` | `latest` | Backend イメージタグ |
+| `frontend_image_repo` | `meeting-minutes-frontend` | Frontend ACR リポジトリ名 |
 | `frontend_image_tag` | `latest` | Frontend イメージタグ |
+| `tag_environment` | `dev` | リソースタグ `environment` の値 |
 
 ---
 
@@ -827,8 +844,10 @@ az storage blob upload \
 |------|------|
 | ジョブストア | インメモリ（`_jobs` dict）。プロセス再起動で処理中ジョブは消失。完了済みジョブは Blob 履歴に永続化済み |
 | Speech Phrase List | Fast Transcription API は `phraseList` 未対応。用語正規化は LLM エージェントに委任 |
+| 音声正規化 | アップロードされた音声は pydub (ffmpeg) で 16 kHz / 16-bit / mono WAV にリサンプルしてから Speech API に送信。正規化に失敗した場合はオリジナルバイト列をそのまま送信するフォールバックあり |
 | Storage コンテナ作成 | `Storage Blob Data Contributor` ロールではコンテナ作成不可。新規コンテナは Terraform で宣言 |
 | 長時間音声 | Fast Transcription の応答待ちタイムアウトは httpx で最大 30 分 (read=1800s) に設定 |
+
 
 ### 13.3 ログ
 
