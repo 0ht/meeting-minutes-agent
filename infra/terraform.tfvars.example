@@ -6,12 +6,9 @@ app_name            = "mtgminutes"
 
 # Azure OpenAI
 openai_sku                 = "S0"
-openai_model_name          = "gpt-4o"
-openai_model_version       = "2024-05-13"
+openai_model_name          = "gpt-5.4"
+openai_model_version       = "2026-03-05"
 openai_deployment_capacity = 30
-
-# Azure Speech (Fast Transcription)
-speech_sku = "S0"
 
 # Storage
 storage_account_tier     = "Standard"
@@ -29,4 +26,13 @@ backend_cpu     = 0.5
 backend_memory  = "1Gi"
 frontend_cpu    = 0.5
 frontend_memory = "1Gi"
+
+# Container images
+backend_image_repo  = "meeting-minutes-backend"
+backend_image_tag   = "latest"
+frontend_image_repo = "meeting-minutes-frontend"
+frontend_image_tag  = "latest"
+
+# Tag value applied to the 'environment' resource tag
+tag_environment = "dev"
 

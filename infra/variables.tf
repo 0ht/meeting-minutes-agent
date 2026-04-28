@@ -51,13 +51,6 @@ variable "openai_deployment_capacity" {
   default     = 30
 }
 
-# ── Azure Speech (Fast Transcription) ─────────────────────────────────────────
-variable "speech_sku" {
-  description = "SKU for the Azure Speech (Cognitive Services) resource"
-  type        = string
-  default     = "S0"
-}
-
 # ── Storage ───────────────────────────────────────────────────────────────────
 variable "storage_account_tier" {
   description = "Storage account tier"

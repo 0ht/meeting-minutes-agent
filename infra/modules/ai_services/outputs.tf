@@ -36,17 +36,11 @@ output "gpt_deployment_name" {
 }
 
 output "speech_endpoint" {
-  description = "Azure Speech (CognitiveServices) endpoint for Fast Transcription"
-  value       = azurerm_cognitive_account.speech.endpoint
+  description = "Speech endpoint — served by the Foundry (AIServices) account"
+  value       = azurerm_cognitive_account.foundry.endpoint
 }
 
 output "speech_id" {
-  description = "Azure Speech (CognitiveServices) resource ID"
-  value       = azurerm_cognitive_account.speech.id
-}
-
-output "speech_key" {
-  description = "Azure Speech (CognitiveServices) primary access key"
-  value       = azurerm_cognitive_account.speech.primary_access_key
-  sensitive   = true
+  description = "Resource ID used for Speech RBAC — same as the Foundry account"
+  value       = azurerm_cognitive_account.foundry.id
 }

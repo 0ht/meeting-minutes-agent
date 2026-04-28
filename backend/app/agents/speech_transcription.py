@@ -14,6 +14,7 @@ Fast Transcription reference:
 """
 from __future__ import annotations
 
+import io
 import json
 import logging
 import re
@@ -21,6 +22,7 @@ from typing import Any, Dict, List
 
 import httpx
 from azure.identity.aio import DefaultAzureCredential
+from pydub import AudioSegment
 
 from app.config import get_settings
 from app.models.schemas import ContentAnalysisResult
@@ -45,6 +47,10 @@ class SpeechTranscriptionAgent:
                 "Azure Speech endpoint not configured — returning mock transcript."
             )
             return self._mock_result()
+
+        # Normalize audio to 16 kHz / 16-bit / mono WAV to avoid sample-rate
+        # mismatches caused by different microphone devices.
+        audio_bytes, filename = self._normalize_audio(audio_bytes, filename)
 
         credential = DefaultAzureCredential()
         try:
@@ -159,6 +165,39 @@ class SpeechTranscriptionAgent:
         minutes = float(match.group(2) or 0)
         seconds = float(match.group(3) or 0)
         return hours * 3600 + minutes * 60 + seconds
+
+    @staticmethod
+    def _normalize_audio(audio_bytes: bytes, filename: str) -> tuple[bytes, str]:
+        """Normalize audio to 16 kHz / 16-bit / mono WAV.
+
+        Different microphone devices may record at varying sample rates
+        (e.g. 44.1 kHz, 48 kHz). When the browser's MediaRecorder writes
+        a WAV header with an incorrect sample rate, playback and
+        transcription produce garbled (slow/fast pitched) results.
+
+        Re-encoding through pydub/ffmpeg fixes the sample rate metadata
+        and resamples to 16 kHz mono — the format Azure Speech works
+        best with.
+        """
+        try:
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "wav"
+            audio = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
+            audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+            buf = io.BytesIO()
+            audio.export(buf, format="wav")
+            normalized = buf.getvalue()
+            logger.info(
+                "Audio normalized: %s → 16kHz/16bit/mono WAV (%d → %d bytes)",
+                filename,
+                len(audio_bytes),
+                len(normalized),
+            )
+            return normalized, "recording.wav"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Audio normalization failed (%s) — using original bytes.", exc
+            )
+            return audio_bytes, filename
 
     @staticmethod
     def _mime_type(filename: str) -> str:

@@ -16,7 +16,7 @@ resource "azurerm_subnet" "container_apps" {
   resource_group_name             = var.resource_group_name
   virtual_network_name            = azurerm_virtual_network.main.name
   address_prefixes                = [var.container_apps_subnet_cidr]
-  default_outbound_access_enabled = true
+  default_outbound_access_enabled = false
 
   delegation {
     name = "Microsoft.App.environments"
@@ -25,4 +25,12 @@ resource "azurerm_subnet" "container_apps" {
       actions = ["Microsoft.Network/virtualNetworks/subnets/join/action"]
     }
   }
+}
+
+# Subnet for Private Endpoints (Storage, etc.)
+resource "azurerm_subnet" "private_endpoints" {
+  name                 = "snet-private-endpoints"
+  resource_group_name  = var.resource_group_name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = [var.private_endpoints_subnet_cidr]
 }

@@ -67,24 +67,7 @@ resource "azurerm_cognitive_deployment" "gpt" {
   }
 }
 
-# ── Azure Speech (Fast Transcription) ──────────────────────────────────────────
-# CognitiveServices multi-service account exposes Speech endpoints for transcription.
-resource "azurerm_cognitive_account" "speech" {
-  name                = "aicu-${local.suffix}"
-  location            = var.location
-  resource_group_name = var.resource_group_name
-  kind                = "CognitiveServices"
-  sku_name            = var.speech_sku  # local_auth (account keys) is enabled to match the deployed environment.
-  # Backend prefers Managed Identity but key-based auth is left available
-  # as a fallback for diagnostics / local testing.  local_auth_enabled  = true
-  tags                = var.tags
-
-  custom_subdomain_name = "aicu-${local.suffix}"
-}
-
-# Renamed from "content_understanding" to "speech" — tell Terraform this is the
-# same resource so it won't destroy and recreate it.
-moved {
-  from = azurerm_cognitive_account.content_understanding
-  to   = azurerm_cognitive_account.speech
-}
+# ── Speech (Fast Transcription) ────────────────────────────────────────────────
+# The AIServices (Foundry) account above also exposes the Speech endpoint, so a
+# separate CognitiveServices account is no longer needed.  The standalone
+# "aicu-*" resource has been consolidated into the Foundry account.

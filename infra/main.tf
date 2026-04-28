@@ -25,7 +25,6 @@ module "ai_services" {
   openai_model_name          = var.openai_model_name
   openai_model_version       = var.openai_model_version
   openai_deployment_capacity = var.openai_deployment_capacity
-  speech_sku                 = var.speech_sku
   tags                       = local.tags
 }
 
@@ -40,6 +39,10 @@ module "storage" {
   storage_account_tier     = var.storage_account_tier
   storage_replication_type = var.storage_replication_type
   tags                     = local.tags
+
+  # Private Endpoint — allows Container Apps to reach blob storage inside the VNet
+  vnet_id                    = module.networking.vnet_id
+  private_endpoint_subnet_id = module.networking.private_endpoints_subnet_id
 }
 
 # ── Networking (VNet + Container Apps subnet) ─────────────────────────────────
@@ -112,25 +115,21 @@ resource "azurerm_role_assignment" "backend_blob_contributor" {
   principal_type       = "ServicePrincipal"
 }
 
-# ── RBAC: Backend Managed Identity → Cognitive Services User (Speech) ──
-resource "azurerm_role_assignment" "backend_speech_user" {
-  scope                = module.ai_services.speech_id
-  role_definition_name = "Cognitive Services User"
-  principal_id         = module.container_apps.backend_principal_id
-  principal_type       = "ServicePrincipal"
-}
-
-moved {
-  from = azurerm_role_assignment.backend_cu_user
-  to   = azurerm_role_assignment.backend_speech_user
-}
-
 # ── RBAC: Backend Managed Identity → Foundry account ─────────────────────────
 # "Azure AI User" grants data-plane access to the Foundry project + model
 # deployments (chat completions, agents, etc.) via DefaultAzureCredential.
 resource "azurerm_role_assignment" "backend_foundry_ai_user" {
   scope                = module.ai_services.foundry_account_id
   role_definition_name = "Azure AI User"
+  principal_id         = module.container_apps.backend_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# Cognitive Services User — required for Speech Fast Transcription on the
+# Foundry (AIServices) account.  Replaces the old per-speech-resource assignment.
+resource "azurerm_role_assignment" "backend_speech_user" {
+  scope                = module.ai_services.foundry_account_id
+  role_definition_name = "Cognitive Services User"
   principal_id         = module.container_apps.backend_principal_id
   principal_type       = "ServicePrincipal"
 }

@@ -11,4 +11,8 @@ variable "container_apps_subnet_cidr" {
   type    = string
   default = "10.0.0.0/23"
 }
+variable "private_endpoints_subnet_cidr" {
+  type    = string
+  default = "10.0.2.0/24"
+}
 variable "tags"                { type = map(string) }
