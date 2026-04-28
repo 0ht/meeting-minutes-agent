@@ -22,7 +22,7 @@
 | バックエンド | Python / FastAPI（Azure Container Apps — **プライベートネットワーク**） |
 | ネットワーク | Azure VNet 統合 + 内部イングレス（フロントエンド→バックエンド間はプライベート） |
 | コンテナ管理 | Azure Container Apps + Azure Container Registry (ACR) |
-| 音声解析 | Azure Speech Fast Transcription API（話者分離対応） |
+| 音声解析 | Azure Speech Fast Transcription API（話者分離対応、Foundry AIServices アカウント統合） |
 | 言語モデル | Azure OpenAI (GPT-5.4) |
 | 認証 | Managed Identity（DefaultAzureCredential） |
 | ストレージ | Azure Blob Storage |
@@ -36,13 +36,17 @@
   ▼
 [Streamlit Frontend]  ← 外部イングレス（パブリック）
   │  Azure Container Apps Environment（VNet統合）
+  │  snet-container-apps (10.0.0.0/23)
   │  プライベートネットワーク
   ▼
 [FastAPI Backend]     ← 内部イングレスのみ（インターネット非公開）
   │
-  ├─► Azure Speech Service（Fast Transcription API）
-  ├─► Azure OpenAI
-  └─► Azure Blob Storage
+  ├─► Azure AI Foundry (AIServices)
+  │     ├─ Speech Fast Transcription API
+  │     └─ Azure OpenAI (GPT-5.4)
+  └─► Azure Blob Storage (public_network_access=false)
+        └── Private Endpoint (snet-private-endpoints 10.0.2.0/24)
+            └── Private DNS Zone (privatelink.blob.core.windows.net)
 ```
 
 > **認証**: すべての Azure サービスへの接続は Managed Identity (DefaultAzureCredential) を使用します。API キーは不要です。
@@ -62,13 +66,23 @@
 │   │   │   ├── script_agent.py           # スクリプト生成エージェント
 │   │   │   ├── minutes_agent.py          # 議事録作成エージェント
 │   │   │   ├── terminology_agent.py      # 用語補足エージェント
-│   │   │   └── pipeline.py               # エージェントパイプライン管理
+│   │   │   ├── pipeline.py               # エージェントパイプライン管理
+│   │   │   ├── foundry_client.py         # Foundry / Azure OpenAI クライアント共有
+│   │   │   ├── terminology_tools.py      # Function Calling ループ実装
+│   │   │   ├── terminology_store.py      # 用語辞書読み込み＋キャッシュ
+│   │   │   └── history_store.py          # 完了ジョブの Blob 永続化
 │   │   ├── models/
 │   │   │   └── schemas.py                # Pydantic モデル
 │   │   ├── routers/
-│   │   │   └── audio.py                  # API エンドポイント
+│   │   │   ├── audio.py                  # 音声アップロード / テキスト投入 / ジョブ取得
+│   │   │   └── history.py                # 履歴一覧・閲覧・ダウンロード・削除
 │   │   └── data/
-│   │       └── terminology.json          # 業界・社内用語辞書
+│   │       ├── terminology.json          # 業界・社内用語辞書
+│   │       └── sample_script.txt         # サンプルスクリプト
+│   ├── scripts/
+│   │   ├── register_foundry_agents.py    # Foundry Agent 登録スクリプト
+│   │   ├── cleanup_foundry_agents.py     # Foundry Agent 削除スクリプト
+│   │   └── smoke_test_foundry.py         # Foundry 接続テスト
 │   ├── requirements.txt
 │   ├── .env.example
 │   └── Dockerfile
@@ -83,9 +97,9 @@
     ├── outputs.tf
     ├── terraform.tfvars.example
     └── modules/
-        ├── ai_services/       # Azure OpenAI + Cognitive Services (Speech)
+        ├── ai_services/       # Azure AI Foundry (AIServices) — OpenAI + Speech 統合
         ├── storage/           # Azure Blob Storage
-        ├── networking/        # VNet + Container Apps サブネット
+        ├── networking/        # VNet + Container Apps サブネット + Private Endpoints サブネット
         ├── container_registry/# Azure Container Registry (ACR)
         └── container_apps/    # Container Apps Environment + frontend + backend
 ```
@@ -136,22 +150,31 @@ BACKEND_URL=http://localhost:8000 streamlit run app.py
 
 `backend/.env.example` を参考に `.env` を作成してください。
 
-| 変数名 | 説明 |
-|--------|------|
-| `AZURE_SPEECH_ENDPOINT` | Azure Cognitive Services エンドポイント（Speech API 用） |
-| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI エンドポイント |
-| `AZURE_OPENAI_DEPLOYMENT` | デプロイメント名（デフォルト: `gpt-5.4`） |
-| `AZURE_STORAGE_ACCOUNT_URL` | Azure Blob Storage アカウント URL |
-| `AZURE_STORAGE_CONTAINER` | コンテナ名（デフォルト: `audio-files`） |
+| 変数名 | 説明 | デフォルト |
+|--------|------|----------|
+| `AZURE_SPEECH_ENDPOINT` | Azure AI Foundry (AIServices) エンドポイント（Speech API 用） | `""` |
+| `FOUNDRY_PROJECT_ENDPOINT` | Foundry プロジェクト エンドポイント（推奨） | `""` |
+| `FOUNDRY_MODEL_DEPLOYMENT` | Foundry モデルデプロイメント名 | `gpt-5.4` |
+| `AZURE_OPENAI_ENDPOINT` | Azure OpenAI エンドポイント（レガシーフォールバック） | `""` |
+| `AZURE_OPENAI_DEPLOYMENT` | デプロイメント名 | `gpt-5.4` |
+| `AZURE_OPENAI_API_VERSION` | Azure OpenAI API バージョン | `2025-04-01-preview` |
+| `AZURE_STORAGE_ACCOUNT_URL` | Azure Blob Storage アカウント URL | `""` |
+| `AZURE_STORAGE_CONTAINER` | 音声ファイル用コンテナ名 | `audio-files` |
+| `AZURE_TERMS_CONTAINER` | 用語辞書コンテナ名 | `terms` |
+| `AZURE_TERMS_BLOB` | 用語辞書 Blob 名 | `terminology.json` |
+| `AZURE_HISTORY_CONTAINER` | 履歴コンテナ名 | `history` |
+| `TERMINOLOGY_CACHE_TTL_SECONDS` | 用語辞書キャッシュ TTL（秒） | `300` |
+| `MAX_AUDIO_SIZE_MB` | 最大音声ファイルサイズ (MB) | `100` |
 
 > **Note:** API キーは不要です。ローカル開発では `az login` 済みの状態で `DefaultAzureCredential` が自動的にトークンを取得します。Azure 上では Managed Identity が使用されます。
 
 フロントエンドの設定:
 
-| 変数名 | 説明 |
-|--------|------|
-| `BACKEND_URL` | バックエンドの URL（Container Apps では内部 URL が自動設定される） |
-| `POLL_INTERVAL_SECONDS` | ポーリング間隔（デフォルト: `2`） |
+| 変数名 | 説明 | デフォルト |
+|--------|------|----------|
+| `BACKEND_URL` | バックエンドの URL（Container Apps では内部 URL が自動設定される） | `http://localhost:8000` |
+| `POLL_INTERVAL_SECONDS` | ポーリング間隔（秒）（Container Apps では `2` に設定） | `3` |
+| `MAX_WAIT_SECONDS` | 最大待機時間（秒） | `3600` |
 
 ### 3. Docker イメージのビルドと ACR へのプッシュ
 
@@ -190,8 +213,9 @@ terraform output acr_login_server      # ACR ログインサーバー
 
 | ロール | 対象リソース | 用途 |
 |--------|-------------|------|
-| Cognitive Services User | Speech (CU) リソース | 音声文字起こし API |
-| Cognitive Services OpenAI User | OpenAI リソース | GPT モデル呼び出し |
+| Cognitive Services User | AI Foundry (AIServices) アカウント | 音声文字起こし API |
+| Cognitive Services OpenAI User | AI Foundry (AIServices) アカウント | GPT モデル呼び出し |
+| Azure AI User | AI Foundry (AIServices) アカウント | Foundry Project / Agent 操作 |
 | Storage Blob Data Contributor | ストレージアカウント | 音声ファイルの保存 |
 
 ---

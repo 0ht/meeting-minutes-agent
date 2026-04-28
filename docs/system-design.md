@@ -1,6 +1,6 @@
 # Meeting Minutes Agent — システム設計書
 
-> **最終更新日**: 2026-04-23  
+> **最終更新日**: 2026-04-28  
 > **バージョン**: 1.0.0
 
 ---
@@ -72,22 +72,26 @@ graph TD
         Backend["FastAPI Backend<br/>内部イングレスのみ / Port 8000<br/>ca-backend-* / min=1, max=5<br/>System Managed Identity"]
     end
 
-    Foundry["Azure AI Foundry<br/>(AIServices)<br/>・GPT-5.4 deployment<br/>・Foundry Project<br/>・Prompt Agents ×3"]
-    Speech["Azure Speech<br/>(CognitiveServices)<br/>Fast Transcription API"]
-    Blob["Azure Blob Storage<br/>Containers:<br/>・audio-files<br/>・terms<br/>・history"]
+    Foundry["Azure AI Foundry<br/>(AIServices)<br/>・GPT-5.4 deployment<br/>・Foundry Project<br/>・Prompt Agents ×3<br/>・Speech Fast Transcription"]
+
+    subgraph Storage["Azure Blob Storage<br/>public_network_access = false"]
+        Blob["Containers:<br/>・audio-files<br/>・terms<br/>・history"]
+    end
+
+    PE["Private Endpoint<br/>snet-private-endpoints (10.0.2.0/24)<br/>+ Private DNS Zone<br/>(privatelink.blob.core.windows.net)"]
 
     Internet -- HTTPS --> Frontend
     Frontend -- "内部ネットワーク" --> Backend
     Backend -- "Managed Identity" --> Foundry
-    Backend -- "Managed Identity" --> Speech
-    Backend -- "Managed Identity" --> Blob
+    Backend -- "Managed Identity" --> PE
+    PE -- "Private Link" --> Storage
 
     style CAE fill:#e8f4fd,stroke:#0078d4,stroke-width:2px
     style Frontend fill:#fff,stroke:#0078d4
     style Backend fill:#fff,stroke:#005a9e
     style Foundry fill:#f3e8fd,stroke:#7b2d8e
-    style Speech fill:#e8fde8,stroke:#107c10
-    style Blob fill:#fdf3e8,stroke:#d48000
+    style Storage fill:#fdf3e8,stroke:#d48000
+    style PE fill:#e8fde8,stroke:#107c10
 ```
 
 ### 2.2 ネットワーク構成
@@ -95,7 +99,15 @@ graph TD
 - **Frontend**: 外部イングレス（パブリック HTTPS）— ユーザーがブラウザからアクセス
 - **Backend**: 内部イングレスのみ — VNet 内からのみ到達可能（インターネット非公開）
 - **通信経路**: Frontend → Backend は `https://{backend-name}.internal.{env-domain}` で接続
-- **Azure サービスへの通信**: Backend から Azure Speech / Foundry / Blob は Managed Identity で認証
+- **Azure サービスへの通信**: Backend から Foundry (AIServices — Speech Fast Transcription + GPT) は Managed Identity で認証
+- **Blob Storage への通信**: `public_network_access_enabled = false` のため、VNet 内の Private Endpoint (`snet-private-endpoints` 10.0.2.0/24) + Private DNS Zone (`privatelink.blob.core.windows.net`) 経由でアクセス
+
+**サブネット構成**:
+
+| サブネット | CIDR | 用途 |
+|-----------|------|------|
+| `snet-container-apps` | `10.0.0.0/23` | Container Apps Environment（委任済み） |
+| `snet-private-endpoints` | `10.0.2.0/24` | Storage Private Endpoint |
 
 ---
 
@@ -526,7 +538,7 @@ graph LR
     B --> C["Step 3<br/>MinutesAgent<br/>議事録生成"]
     C --> D["Step 4<br/>TerminologyAgent<br/>用語補足"]
 
-    A -.-|"Azure Speech"| SA((Speech API))
+    A -.-|"Foundry (Speech)"| SA((Speech API))
     B -.-|"Foundry Agent"| FA1((meeting-script-agent))
     C -.-|"Foundry Agent"| FA2((meeting-minutes-agent))
     D -.-|"Foundry Agent"| FA3((meeting-terminology-agent))
@@ -639,9 +651,9 @@ sequenceDiagram
 graph TD
     Root["infra/<br/>main.tf / variables.tf / outputs.tf<br/>providers.tf / terraform.tfvars"]
 
-    Root --> AI["modules/ai_services/<br/>Foundry Account + Project<br/>GPT Deployment + Speech"]
-    Root --> ST["modules/storage/<br/>Storage Account<br/>+ 3 Blob Containers"]
-    Root --> NW["modules/networking/<br/>VNet + CA Subnet"]
+    Root --> AI["modules/ai_services/<br/>Foundry Account (AIServices) + Project<br/>GPT Deployment<br/>Speech は Foundry アカウントに統合"]
+    Root --> ST["modules/storage/<br/>Storage Account<br/>+ 3 Blob Containers<br/>+ Private Endpoint + Private DNS Zone"]
+    Root --> NW["modules/networking/<br/>VNet + CA Subnet<br/>+ Private Endpoints Subnet"]
     Root --> CR["modules/container_registry/<br/>ACR (Basic SKU)"]
     Root --> CA["modules/container_apps/<br/>CAE + Backend CA<br/>+ Frontend CA"]
 
@@ -652,9 +664,9 @@ graph TD
 ```
 
 ```
-    ├── ai_services/     # Azure AI Foundry アカウント + プロジェクト + GPT デプロイ + Speech
-    ├── storage/         # ストレージアカウント + 3 コンテナ
-    ├── networking/      # VNet + Container Apps サブネット
+    ├── ai_services/     # Azure AI Foundry アカウント (AIServices) + プロジェクト + GPT デプロイ（Speech も同一アカウント）
+    ├── storage/         # ストレージアカウント + 3 コンテナ + Private Endpoint + Private DNS Zone
+    ├── networking/      # VNet + Container Apps サブネット + Private Endpoints サブネット
     ├── container_registry/ # ACR
     └── container_apps/  # CAE + Backend CA + Frontend CA
 ```
@@ -667,13 +679,15 @@ graph TD
 | AI Services Account | `aif-{app}-{env}` | Foundry 互換 AIServices (kind=AIServices) |
 | Foundry Project | `proj-{app}-{env}` | Foundry プロジェクト (azapi) |
 | GPT Deployment | `gpt-5.4` | GlobalStandard SKU、30K TPM |
-| Cognitive Services | `aicu-{app}-{env}` | Speech Fast Transcription 用 (kind=CognitiveServices) |
 | Storage Account | `st{app}{env}` | Blob Storage（shared_access_key_enabled=false） |
 | Blob Container | `audio-files` | 音声ファイル一時保存 |
 | Blob Container | `terms` | 用語辞書 (terminology.json) |
 | Blob Container | `history` | 議事録履歴永続化 |
 | Virtual Network | `vnet-{app}-{env}` | 10.0.0.0/16 |
 | Subnet | `snet-container-apps` | 10.0.0.0/23、Container Apps 委任 |
+| Subnet | `snet-private-endpoints` | 10.0.2.0/24、Storage Private Endpoint 用 |
+| Private Endpoint | `pe-blob-{sa_name}` | Blob Storage への Private Link 接続 |
+| Private DNS Zone | `privatelink.blob.core.windows.net` | Storage Private Endpoint の名前解決 |
 | Container Registry | ACR | Basic SKU |
 | Log Analytics | `law-{app}-{env}` | Container Apps ログ集約 |
 | Container Apps Env | `cae-{app}-{env}` | VNet 統合、Consumption プロファイル |
@@ -687,9 +701,9 @@ Backend の System Managed Identity に対する割り当て:
 | ロール | スコープ | 用途 |
 |--------|---------|------|
 | `Storage Blob Data Contributor` | Storage Account | Blob 読み書き (audio, terms, history) |
-| `Cognitive Services User` | Cognitive Services Account | Speech Fast Transcription |
-| `Azure AI User` | AI Services Account | Foundry Project / Agent 操作 |
-| `Cognitive Services OpenAI User` | AI Services Account | GPT モデル推論 |
+| `Cognitive Services User` | AI Services Account (Foundry) | Speech Fast Transcription |
+| `Azure AI User` | AI Services Account (Foundry) | Foundry Project / Agent 操作 |
+| `Cognitive Services OpenAI User` | AI Services Account (Foundry) | GPT モデル推論 |
 
 ---
 
@@ -784,7 +798,7 @@ az storage blob upload \
 
 | 変数名 | 説明 | デフォルト |
 |--------|------|-----------|
-| `AZURE_SPEECH_ENDPOINT` | Azure Speech (CognitiveServices) エンドポイント | `""` |
+| `AZURE_SPEECH_ENDPOINT` | Azure Speech エンドポイント（Foundry AIServices アカウントと同一） | `""` |
 | `FOUNDRY_PROJECT_ENDPOINT` | Foundry プロジェクト エンドポイント | `""` |
 | `FOUNDRY_MODEL_DEPLOYMENT` | Foundry モデルデプロイメント名 | `gpt-5.4` |
 | `AZURE_OPENAI_ENDPOINT` | Azure OpenAI エンドポイント（レガシー） | `""` |
@@ -812,11 +826,11 @@ az storage blob upload \
 | `openai_model_name` | `gpt-5.4` | GPT モデル名 |
 | `openai_model_version` | `2026-03-05` | GPT モデルバージョン |
 | `openai_deployment_capacity` | `30` | TPM 容量 (千単位) |
-| `speech_sku` | `S0` | Azure Speech SKU |
 | `storage_account_tier` | `Standard` | ストレージアカウントティア |
 | `storage_replication_type` | `LRS` | ストレージレプリケーション種別 |
 | `vnet_address_space` | `10.0.0.0/16` | VNet CIDR |
 | `container_apps_subnet_cidr` | `10.0.0.0/23` | CA サブネット CIDR |
+| `private_endpoints_subnet_cidr` | `10.0.2.0/24` | Private Endpoints サブネット CIDR（networking モジュール内で定義） |
 | `acr_sku` | `Basic` | ACR SKU (Basic/Standard/Premium) |
 | `backend_cpu` | `0.5` | Backend vCPU 割り当て |
 | `backend_memory` | `1Gi` | Backend メモリ割り当て |
