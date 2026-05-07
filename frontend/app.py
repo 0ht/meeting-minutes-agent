@@ -79,6 +79,7 @@ h4 { font-size: 1.0rem !important; }
 }
 .step-card.done    { border-color: #107c10; background: #dff6dd; }
 .step-card.active  { border-color: #0078d4; background: #c7e0f4; }
+.step-card.error   { border-color: #a4262c; background: #fde7e9; }
 .step-card.pending { border-color: #e1dfdd; background: #f3f2f1; color: #a19f9d; }
 
 /* Result markdown tweaks */
@@ -692,16 +693,26 @@ def page_processing() -> None:
             detail_ph = st.empty()
 
     def render_step(key: str, icon: str, title: str, desc: str,
-                    state: str, status_text: str) -> None:
-        css = {"done": "done", "active": "active"}.get(state, "pending")
-        icon_prefix = {"done": "✅", "active": "🔄", "error": "❌"}.get(state, "⬜")
-        color = {"pending": "#a19f9d"}.get(state, "inherit")
+                    state: str, status_text: str, error_detail: str = "") -> None:
+        css = {"done": "done", "active": "active", "error": "done"}.get(state, "pending")
+        if state == "error":
+            css = "error"
+        icon_prefix = {
+            "done": "✅", "active": "🔄", "error": "❌", "skipped": "⏭️",
+        }.get(state, "⬜")
+        color = {"pending": "#a19f9d", "skipped": "#a19f9d"}.get(state, "inherit")
+        detail_html = ""
+        if error_detail:
+            detail_html = (
+                f'<div style="font-size:.8rem;color:#a4262c;margin-top:2px;'
+                f'word-break:break-word">{error_detail}</div>'
+            )
         step_phs[key].markdown(
             f'<div class="step-card {css}">'
             f'<span style="font-size:1.4rem">{icon}</span>'
             f'<div><strong>{title}</strong><br>'
-            f'<span style="font-size:.83rem">{desc}</span></div>'
-            f'<span style="margin-left:auto;font-size:.83rem;color:{color}">'
+            f'<span style="font-size:.83rem">{desc}</span>{detail_html}</div>'
+            f'<span style="margin-left:auto;font-size:.83rem;color:{color};white-space:nowrap">'
             f"{icon_prefix} {status_text}</span>"
             f"</div>",
             unsafe_allow_html=True,
@@ -756,11 +767,41 @@ def page_processing() -> None:
         is_error   = result["status"] == "error"
         message    = result.get("message", "処理中...")
 
+        # Determine which step failed (if any) based on partial results.
+        # The step that was running when the error occurred is the first
+        # incomplete step in the pipeline.
+        failed_step: str | None = None
+        if is_error:
+            if input_mode == "transcript":
+                if not has_script:
+                    failed_step = "script"
+                elif not has_min:
+                    failed_step = "minutes"
+                elif not has_final:
+                    failed_step = "term"
+            else:
+                if not has_cu:
+                    failed_step = "cu"
+                elif not has_script:
+                    failed_step = "script"
+                elif not has_min:
+                    failed_step = "minutes"
+                elif not has_final:
+                    failed_step = "term"
+
+        # Extract a short error reason from the backend message.
+        error_reason = ""
+        if is_error and message:
+            # Backend format: "エラーが発生しました: <detail>"
+            if ":" in message:
+                error_reason = message.split(":", 1)[1].strip()
+            else:
+                error_reason = message
+
         for key, icon, title, desc in _STEPS:
             if key == "cu":
                 done, active = has_cu, not has_cu and not is_error
             elif key == "script":
-                # In transcript mode there is no preceding 'cu' step to wait for.
                 if input_mode == "transcript":
                     done, active = has_script, not has_script and not is_error
                 else:
@@ -770,12 +811,20 @@ def page_processing() -> None:
             else:
                 done, active = has_final, has_min and not has_final and not is_error
 
-            state = "done" if done else ("active" if active else ("error" if is_error else "pending"))
-            status_text = (
-                "完了" if done
-                else ("処理中..." if active else ("エラー" if is_error else "待機中"))
-            )
-            render_step(key, icon, title, desc, state, status_text)
+            if done:
+                state, status_text, detail = "done", "完了", ""
+            elif is_error and key == failed_step:
+                state, status_text = "error", "エラー"
+                detail = error_reason
+            elif is_error:
+                # Steps that were never reached (after the failed step).
+                state, status_text, detail = "skipped", "未到達", ""
+            elif active:
+                state, status_text, detail = "active", "処理中...", ""
+            else:
+                state, status_text, detail = "pending", "待機中", ""
+
+            render_step(key, icon, title, desc, state, status_text, detail)
 
         # Update detail panel if visible
         if detail_ph is not None:
@@ -792,10 +841,16 @@ def page_processing() -> None:
 
         if is_error:
             msg_ph.error(f"❌ {message}")
-            st.session_state.error_msg = message
-            st.session_state.page = "error"
-            time.sleep(1)
-            st.rerun()
+            # Stay on this page so the user can see which step failed.
+            # Show a button to go back to input.
+            with col_main:
+                st.divider()
+                col_e1, col_e2, col_e3 = st.columns([3, 2, 3])
+                with col_e2:
+                    if st.button("🔄 やり直す", use_container_width=True, type="primary"):
+                        for k, v in _DEFAULTS.items():
+                            st.session_state[k] = v
+                        st.rerun()
             return
 
         msg_ph.info(f"⏳ {message}")
