@@ -16,6 +16,7 @@ upserts a new version of the agent.
 Auth: `AzureCliCredential` (run `az login` first).
 
 Usage:
+    export FOUNDRY_PROJECT_ENDPOINT=https://<aif-account>.services.ai.azure.com/api/projects/<project>
     python backend/scripts/register_foundry_agents.py
 """
 from __future__ import annotations
@@ -33,10 +34,11 @@ from azure.ai.projects.models import (
 from azure.identity import AzureCliCredential
 
 # ── Config ──────────────────────────────────────────────────────────────────
-PROJECT_ENDPOINT = (
-    "https://aif-mtgminutes-dev.services.ai.azure.com/api/projects/proj-mtgminutes-dev"
-)
-MODEL = "gpt-5.4"
+PROJECT_ENDPOINT = os.environ.get("FOUNDRY_PROJECT_ENDPOINT", "")
+MODEL = os.environ.get("FOUNDRY_MODEL_DEPLOYMENT", "gpt-5.4")
+
+if not PROJECT_ENDPOINT:
+    sys.exit("ERROR: FOUNDRY_PROJECT_ENDPOINT 環境変数を設定してください。")
 
 
 # ── Tool schema (shared by all 3 agents) ────────────────────────────────────

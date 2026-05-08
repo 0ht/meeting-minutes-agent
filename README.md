@@ -90,18 +90,24 @@
 │   ├── app.py                            # Streamlit アプリ
 │   ├── requirements.txt
 │   └── Dockerfile
-└── infra/
-    ├── providers.tf
-    ├── main.tf
-    ├── variables.tf
-    ├── outputs.tf
-    ├── terraform.tfvars.example
-    └── modules/
-        ├── ai_services/       # Azure AI Foundry (AIServices) — OpenAI + Speech 統合
-        ├── storage/           # Azure Blob Storage
-        ├── networking/        # VNet + Container Apps サブネット + Private Endpoints サブネット
-        ├── container_registry/# Azure Container Registry (ACR)
-        └── container_apps/    # Container Apps Environment + frontend + backend
+├── docs/
+│   ├── system-design.md                  # システム設計書（アーキテクチャ・API 仕様・データモデル等）
+│   ├── custom-terminology-options.md     # 社内用語カスタマイズの実装オプション比較
+│   └── design-infrastructure-diagram.drawio  # インフラ構成図（draw.io 形式）
+├── infra/
+│   ├── providers.tf
+│   ├── main.tf
+│   ├── variables.tf
+│   ├── outputs.tf
+│   ├── terraform.tfvars.example
+│   └── modules/
+│       ├── ai_services/       # Azure AI Foundry (AIServices) — OpenAI + Speech 統合
+│       ├── storage/           # Azure Blob Storage + Private Endpoint + Private DNS Zone
+│       ├── networking/        # VNet + Container Apps サブネット + Private Endpoints サブネット
+│       ├── container_registry/# Azure Container Registry (ACR)
+│       └── container_apps/    # Container Apps Environment + frontend + backend
+└── scripts/
+    └── update-drawio-icons.ps1           # draw.io Azure アイコン更新スクリプト
 ```
 
 ---
@@ -228,7 +234,15 @@ terraform output acr_login_server      # ACR ログインサーバー
 
 - **Content-Type:** `multipart/form-data`
 - **Body:** `file` — 音声ファイル (wav, mp3, mp4, m4a, ogg, webm, flac)
-- **Response:** `{ "job_id": "...", "status": "pending" }`
+- **Response:** `202 Accepted` — `{ "job_id": "...", "status": "pending" }`
+
+### POST `/api/v1/audio/transcript`
+
+文字起こし済みテキストから議事録生成を開始します。
+
+- **Content-Type:** `application/json`
+- **Body:** `{ "transcript": "...", "speakers": ["話者A", "話者B"], "language": "ja" }`
+- **Response:** `202 Accepted` — `{ "job_id": "...", "status": "pending" }`
 
 ### GET `/api/v1/audio/jobs/{job_id}`
 
@@ -247,22 +261,97 @@ terraform output acr_login_server      # ACR ログインサーバー
 
 `status` は `pending` → `processing` → `done` / `error` と変化します。
 
+### 履歴エンドポイント
+
+| メソッド | パス | 説明 |
+|----------|------|------|
+| `GET` | `/api/v1/history` | 議事録履歴一覧（新しい順） |
+| `GET` | `/api/v1/history/{job_id}` | 保存済み議事録の詳細 |
+| `GET` | `/api/v1/history/{job_id}/input` | 入力ファイルのダウンロード |
+| `DELETE` | `/api/v1/history/{job_id}` | 履歴削除 (`204 No Content`) |
+
+### ヘルスチェック
+
+- `GET /health` → `{ "status": "ok" }`
+
 ---
 
 ## 用語辞書のカスタマイズ
 
-`backend/app/data/terminology.json` を編集することで、業界・社内用語を追加できます。
+`backend/app/data/terminology.json`（ローカル）または Azure Blob Storage の `terms/terminology.json` を編集することで、業界・社内用語を追加できます。
 
 ```json
 {
-  "industry": {
-    "用語": "定義"
-  },
-  "company": {
-    "社内用語": "説明"
-  }
+  "phrase_list": ["MCP", "Azure OpenAI"],
+  "term_mappings": [
+    {
+      "variants": ["えむしーぴー", "エムシーピー", "MCP"],
+      "canonical": "MCP",
+      "definition": "Model Context Protocol。AI とデータソース/ツールを接続するプロトコル。",
+      "category": "tech"
+    }
+  ]
 }
 ```
+
+Blob Storage 上の辞書が優先され、取得できない場合はローカルファイルにフォールバックします。キャッシュ TTL（デフォルト 300 秒）後に自動で再取得されます。
+
+詳細な実装オプションの比較は [`docs/custom-terminology-options.md`](docs/custom-terminology-options.md) を参照してください。
+
+---
+
+## 本番利用に向けた注意点
+
+> **本リポジトリはデモ・PoC 用途で構築されています。** 本番環境で運用する場合は、以下の項目を確認・対応してください。
+
+### セキュリティ
+
+| 項目 | 現状（デモ） | 本番での推奨対応 |
+|------|-------------|-----------------|
+| **認証・認可** | フロントエンド／API ともに認証なし | Azure AD (Entra ID) / Easy Auth による認証を追加。API には OAuth 2.0 Bearer トークン検証を実装 |
+| **CORS** | `allow_origins=["*"]`（全オリジン許可） | フロントエンドの FQDN のみに制限 |
+| **XSRF 保護** | Streamlit の `enableXsrfProtection=false` | `true` に変更、または WAF で保護 |
+| **WAF / API Gateway** | なし（フロントエンドが直接公開） | Azure Front Door + WAF、または API Management を前段に配置 |
+| **ネットワーク** | フロントエンドはパブリック公開 | 必要に応じて IP 制限や Private Link 経由のアクセスに変更 |
+| **コンテナイメージ脆弱性** | スキャンなし | ACR の Microsoft Defender for Containers を有効化し、CI/CD でイメージスキャンを実施 |
+| **ffmpeg** | apt パッケージを直接インストール | 既知の脆弱性がないバージョンを固定し、定期的にアップデート |
+
+### 可用性・信頼性
+
+| 項目 | 現状（デモ） | 本番での推奨対応 |
+|------|-------------|-----------------|
+| **ジョブストア** | インメモリ（`dict`）。プロセス再起動で消失 | Redis / Cosmos DB / Azure Queue など永続的なジョブ管理に移行 |
+| **スケーリング** | 単一インスタンス前提（インメモリ状態を共有不可） | ジョブストアの外部化後、水平スケーリングが可能に |
+| **ストレージ冗長性** | `LRS`（ローカル冗長） | 本番は `ZRS`（ゾーン冗長）または `GRS`（地理冗長）を推奨 |
+| **リージョン** | 単一リージョン（japaneast） | DR 要件に応じてマルチリージョン構成を検討 |
+| **ACR SKU** | `Basic`（SLA なし） | `Standard` 以上を推奨。`Premium` で Geo-Replication が利用可能 |
+| **バックアップ** | Blob Storage のバックアップポリシーなし | Blob のバージョニング有効化、または Azure Backup for Blobs を設定 |
+
+### 運用・監視
+
+| 項目 | 現状（デモ） | 本番での推奨対応 |
+|------|-------------|-----------------|
+| **ログ** | Python `logging` → Log Analytics（保持 30 日） | 構造化ログ（JSON 形式）の導入。Application Insights でのトレース相関 |
+| **アラート** | なし | エラー率・レイテンシ・リソース使用率に対する Azure Monitor アラートを設定 |
+| **CI/CD** | なし（手動ビルド＆デプロイ） | GitHub Actions 等で自動テスト → ACR ビルド → Container Apps デプロイのパイプラインを構築 |
+| **シークレット管理** | 環境変数で直接設定 | Azure Key Vault に格納し、Container Apps の Key Vault 参照で注入 |
+| **レート制限** | なし | API Management のレート制限ポリシー、または FastAPI ミドルウェアで実装 |
+
+### その他
+
+- **Streamlit の制約**: Streamlit はプロトタイピング向けの UI フレームワークであり、大規模な同時接続には不向きです。本番では React / Next.js 等のフロントエンドへの置き換えを検討してください。
+- **音声ファイルサイズ**: デフォルトの上限は 100MB です。大規模な会議の録音を扱う場合は、チャンク分割による処理や Azure Speech Batch Transcription への移行を検討してください。
+- **コスト管理**: GPT-5.4 の TPM（Tokens Per Minute）を適切に設定し、Azure Cost Management でコストアラートを設定することを推奨します。
+
+---
+
+## ドキュメント
+
+| ドキュメント | 説明 |
+|-------------|------|
+| [`docs/system-design.md`](docs/system-design.md) | システム設計書（アーキテクチャ・API 仕様・データモデル・インフラ構成・運用ガイド） |
+| [`docs/custom-terminology-options.md`](docs/custom-terminology-options.md) | 社内用語カスタマイズの実装オプション比較（Phrase List / Custom Speech / Blob / AI Search 等） |
+| [`docs/design-infrastructure-diagram.drawio`](docs/design-infrastructure-diagram.drawio) | インフラ構成図（draw.io 形式） |
 
 ---
 

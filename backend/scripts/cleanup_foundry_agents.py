@@ -1,6 +1,7 @@
 """One-off admin: list / delete Foundry agents in the project.
 
 Usage:
+    export FOUNDRY_PROJECT_ENDPOINT=https://<aif-account>.services.ai.azure.com/api/projects/<project>
     python cleanup_foundry_agents.py list
     python cleanup_foundry_agents.py delete-all
     python cleanup_foundry_agents.py delete-by-name <name>
@@ -9,14 +10,15 @@ Auth: AzureCliCredential (run `az login` first).
 """
 from __future__ import annotations
 
+import os
 import sys
 
 from azure.ai.agents import AgentsClient
 from azure.identity import AzureCliCredential
 
-ENDPOINT = (
-    "https://aif-mtgminutes-dev.services.ai.azure.com/api/projects/proj-mtgminutes-dev"
-)
+ENDPOINT = os.environ.get("FOUNDRY_PROJECT_ENDPOINT", "")
+if not ENDPOINT:
+    sys.exit("ERROR: FOUNDRY_PROJECT_ENDPOINT 環境変数を設定してください。")
 
 
 def _client() -> AgentsClient:

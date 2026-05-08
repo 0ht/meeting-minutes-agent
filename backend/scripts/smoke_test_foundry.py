@@ -1,13 +1,16 @@
-"""Smoke test: invoke the registered Foundry minutes-agent via Responses API."""
+"""Smoke test: invoke the registered Foundry minutes-agent via Responses API.
+
+Usage:
+    export FOUNDRY_PROJECT_ENDPOINT=https://<aif-account>.services.ai.azure.com/api/projects/<project>
+    python backend/scripts/smoke_test_foundry.py
+"""
 import asyncio
 import os
 import sys
 
-# Force settings to point at the Foundry project (uses AzureCliCredential locally).
-os.environ.setdefault(
-    "FOUNDRY_PROJECT_ENDPOINT",
-    "https://aif-mtgminutes-dev.services.ai.azure.com/api/projects/proj-mtgminutes-dev",
-)
+# Uses FOUNDRY_PROJECT_ENDPOINT env var (set via .env or shell).
+if not os.environ.get("FOUNDRY_PROJECT_ENDPOINT"):
+    sys.exit("ERROR: FOUNDRY_PROJECT_ENDPOINT 環境変数を設定してください。")
 os.environ.setdefault("FOUNDRY_MODEL_DEPLOYMENT", "gpt-5.4")
 os.environ.setdefault("AZURE_OPENAI_API_VERSION", "2025-04-01-preview")
 # Avoid blob fetch — use local file fallback in terminology_store.
