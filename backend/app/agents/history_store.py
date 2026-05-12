@@ -15,6 +15,7 @@ pipeline still works locally.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 from dataclasses import dataclass
@@ -31,6 +32,19 @@ logger = logging.getLogger(__name__)
 
 
 _JOB_BLOB = "job.json"
+
+
+def _encode_meta_value(value: str) -> str:
+    """Encode a metadata value to Base64 so non-ASCII chars survive HTTP headers."""
+    return base64.b64encode(value.encode("utf-8")).decode("ascii")
+
+
+def _decode_meta_value(value: str) -> str:
+    """Decode a Base64-encoded metadata value back to a string."""
+    try:
+        return base64.b64decode(value.encode("ascii")).decode("utf-8")
+    except Exception:
+        return value  # not encoded — return as-is for backward compat
 
 
 @dataclass
@@ -110,12 +124,14 @@ async def save_job(
             container = svc.get_container_client(_container())
 
             # Blob custom metadata for fast listing (avoids downloading job.json).
+            # Values are Base64-encoded because Azure Blob metadata is sent as
+            # HTTP headers which only support ASCII.
             blob_metadata = {
                 "job_id": job_id,
-                "title": title[:256],  # Blob metadata values max ~8 KB total
+                "title": _encode_meta_value(title[:256]),
                 "created_at": created_at,
                 "input_kind": input_kind,
-                "input_filename": input_filename[:256],
+                "input_filename": _encode_meta_value(input_filename[:256]),
                 "transcription_mode": transcription_mode,
             }
 
@@ -170,10 +186,10 @@ async def list_entries(limit: int = 100) -> list[HistoryEntry]:
                         entries.append(
                             HistoryEntry(
                                 job_id=md.get("job_id", job_id),
-                                title=md.get("title", "(無題)"),
+                                title=_decode_meta_value(md.get("title", "(無題)")),
                                 created_at=md.get("created_at", ""),
                                 input_kind=md.get("input_kind", "audio"),
-                                input_filename=md.get("input_filename", ""),
+                                input_filename=_decode_meta_value(md.get("input_filename", "")),
                                 input_blob=f"{job_id}/input.bin",
                                 has_result=True,
                                 transcription_mode=md.get("transcription_mode", ""),
