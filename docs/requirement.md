@@ -61,7 +61,7 @@ graph TD
 
 | 機能 | 説明 |
 |------|------|
-| 音声アップロード | WAV / MP3 / MP4 / M4A / OGG / WebM / FLAC 形式に対応（最大 100MB） |
+| 音声アップロード | WAV / MP3 / MP4 / M4A / OGG / WebM / FLAC 形式に対応（最大 500MB）。フロントエンドから Blob Storage に直接アップロード |
 | ブラウザ録音 | マイクで直接録音し、そのまま議事録生成を開始 |
 | テキスト入力 | 文字起こし済みテキスト / VTT / SRT / DOCX ファイルの直接投入 |
 
@@ -87,9 +87,10 @@ graph TD
 
 | 機能 | 説明 |
 |------|------|
-| 履歴一覧 | 完了ジョブを Blob Storage に永続保存し、一覧表示（新しい順） |
+| 履歴一覧 | 完了ジョブを Blob Storage に永続保存し、一覧表示（新しい順）。各ステップの処理時間を記録・表示 |
 | 再表示 | 保存済み議事録の詳細閲覧 |
 | 入力ファイル取得 | 元の音声ファイル / テキストのダウンロード |
+| タイムアウト再開 | Batch Transcription がタイムアウトした場合、履歴に保存し後から状況確認・再開が可能 |
 | 削除 | 履歴の個別削除 |
 
 ### 2.5 用語辞書
@@ -113,7 +114,7 @@ graph TD
 | ストレージ | `shared_access_key_enabled = false`、`network_rules: Deny + AzureServices bypass`、Private Endpoint 経由 |
 | ネットワーク | Backend は内部イングレスのみ（インターネット非公開）。Frontend のみ外部公開。Storage / AI Services / ACR はすべて `public_network_access_enabled = false` + Private Endpoint 経由 |
 | RBAC (Backend MI) | 最小権限の 5 ロール: Storage Blob Data Contributor / Cognitive Services User / Azure AI User / Cognitive Services OpenAI User / AcrPull |
-| RBAC (Frontend MI) | AcrPull（コンテナイメージプル） |
+| RBAC (Frontend MI) | AcrPull（コンテナイメージプル）、Storage Blob Data Contributor（音声ファイルの直接アップロード） |
 | RBAC (AI Services MI) | Storage Blob Data Reader（Blob 上の音声ファイル読み取り） |
 
 ### 3.2 可用性・スケーリング
@@ -128,9 +129,9 @@ graph TD
 
 | 項目 | 値 |
 |------|-----|
-| 音声ファイル上限 | 100MB |
+| 音声ファイル上限 | 500MB |
 | 音声長上限 | diarization 有効時 2 時間未満（Fast）/ 240 分（Batch） |
-| Speech タイムアウト | Fast: httpx read=1800s（30 分）、Batch: ポーリング最大 1800s（30 分） |
+| Speech タイムアウト | Fast: httpx read=1800s（30 分）、Batch: ポーリング最大 3600s（1 時間）。タイムアウト時は履歴に保存し後から再開可能 |
 | GPT モデル | GPT-5.4、GlobalStandard SKU、30K TPM |
 | 用語辞書キャッシュ TTL | 300 秒 |
 
@@ -187,6 +188,24 @@ graph TD
 
 **エラー**: `415` 未対応形式 / `413` サイズ超過
 
+#### `POST /api/v1/audio/start-from-blob`
+
+Blob Storage にアップロード済みの音声ファイルから議事録生成を開始する。フロントエンドが Blob に直接アップロードした後、blob 名を指定して呼び出す。
+
+| 項目 | 値 |
+|------|----|
+| Content-Type | `application/json` |
+| レスポンス | `202 Accepted` |
+
+**リクエスト例**:
+```json
+{
+  "blob_name": "upload/{uuid}/meeting.mp4",
+  "filename": "meeting.mp4",
+  "transcription_mode": "batch"
+}
+```
+
 #### `POST /api/v1/audio/transcript`
 
 文字起こし済みテキストから議事録生成を開始する。
@@ -221,7 +240,7 @@ graph TD
 }
 ```
 
-`status`: `pending` → `processing` → `done` / `error`
+`status`: `pending` → `processing` → `done` / `error` / `timeout`
 
 ### 5.2 History エンドポイント
 
@@ -230,6 +249,8 @@ graph TD
 | `GET` | `/api/v1/history` | 議事録履歴一覧（新しい順） |
 | `GET` | `/api/v1/history/{job_id}` | 保存済み議事録の詳細 |
 | `GET` | `/api/v1/history/{job_id}/input` | 入力ファイルのダウンロード |
+| `GET` | `/api/v1/history/{job_id}/transcription-status` | タイムアウトした Batch Transcription のステータス確認 |
+| `POST` | `/api/v1/history/{job_id}/resume` | タイムアウトした Batch Transcription の再開（`202 Accepted`） |
 | `DELETE` | `/api/v1/history/{job_id}` | 履歴削除 (`204 No Content`) |
 
 ### 5.3 ヘルスチェック
@@ -250,6 +271,8 @@ stateDiagram-v2
     pending --> processing
     processing --> done
     processing --> error
+    processing --> timeout
+    timeout --> processing : 再開
     done --> [*]
     error --> [*]
 ```

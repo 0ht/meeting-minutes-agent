@@ -159,6 +159,14 @@ resource "azurerm_container_app" "frontend" {
         name  = "POLL_INTERVAL_SECONDS"
         value = "2"
       }
+      env {
+        name  = "AZURE_STORAGE_ACCOUNT_URL"
+        value = var.storage_account_url
+      }
+      env {
+        name  = "AZURE_STORAGE_CONTAINER"
+        value = var.audio_container_name
+      }
     }
   }
 

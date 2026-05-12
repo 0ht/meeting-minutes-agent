@@ -151,8 +151,8 @@ BACKEND_URL=http://localhost:8000 streamlit run app.py
 | `AZURE_TERMS_BLOB` | 用語辞書 Blob 名 | `terminology.json` |
 | `AZURE_HISTORY_CONTAINER` | 履歴コンテナ名 | `history` |
 | `TERMINOLOGY_CACHE_TTL_SECONDS` | 用語辞書キャッシュ TTL（秒） | `300` |
-| `MAX_AUDIO_SIZE_MB` | 最大音声ファイルサイズ (MB) | `100` |
-| `SPEECH_POLL_TIMEOUT_SECONDS` | Speech API ポーリングタイムアウト | `1800` |
+| `MAX_AUDIO_SIZE_MB` | 最大音声ファイルサイズ (MB) | `500` |
+| `SPEECH_POLL_TIMEOUT_SECONDS` | Speech API ポーリングタイムアウト | `3600` |
 | `SPEECH_POLL_INTERVAL_SECONDS` | Speech API ポーリング間隔 | `10` |
 
 ### 4.2 フロントエンド
@@ -185,7 +185,7 @@ BACKEND_URL=http://localhost:8000 streamlit run app.py
 | `container_apps_subnet_cidr` | `10.0.0.0/23` | CA サブネット CIDR |
 | `acr_sku` | `Premium` | ACR SKU（Premium は Private Endpoint 必須） |
 | `backend_cpu` / `backend_memory` | `0.5` / `1Gi` | Backend リソース割り当て |
-| `frontend_cpu` / `frontend_memory` | `0.5` / `1Gi` | Frontend リソース割り当て |
+| `frontend_cpu` / `frontend_memory` | `1` / `2Gi` | Frontend リソース割り当て（大容量アップロード対応） |
 | `tag_environment` | `dev` | リソースタグ値 |
 
 ---
@@ -196,7 +196,8 @@ Terraform で自動設定される。手動で確認する場合:
 
 | ロール | 対象リソース | 用途 |
 |--------|-------------|------|
-| `Storage Blob Data Contributor` | Storage Account | 音声・用語辞書・履歴の読み書き |
+| `Storage Blob Data Contributor` | Storage Account | Backend: 音声・用語辞書・履歴の読み書き |
+| `Storage Blob Data Contributor` | Storage Account | Frontend: 音声ファイルの Blob 直接アップロード |
 | `Cognitive Services User` | AI Foundry Account | Speech Fast / Batch Transcription |
 | `Cognitive Services OpenAI User` | AI Foundry Account | GPT モデル呼び出し |
 | `Azure AI User` | AI Foundry Account | Foundry Project / Agent 操作 |

@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import time
 
-from app.agents.speech_transcription import SpeechTranscriptionAgent
+from app.agents.speech_transcription import BatchTranscriptionTimeout, SpeechTranscriptionAgent
 from app.agents import history_store
 from app.agents.job_store import create_job, get_job, update_job as _update_job
 from app.agents.minutes_agent import MinutesAgent
@@ -35,15 +35,18 @@ async def run_pipeline(
     filename: str = "audio.wav",
     transcript: ContentAnalysisResult | None = None,
     transcription_mode: str = "fast",
+    blob_name: str | None = None,
 ) -> None:
     """Run the full agent pipeline in the background for *job_id*.
 
-    Either *audio_bytes* or *transcript* must be supplied. If *transcript* is
-    given, Step 1 (Speech Transcription) is skipped.
+    Either *audio_bytes*, *blob_name*, or *transcript* must be supplied.
+    If *transcript* is given, Step 1 (Speech Transcription) is skipped.
+    If *blob_name* is given, audio is read directly from Blob Storage
+    (skips the upload step inside the transcription agent).
     *transcription_mode* is ``"fast"`` or ``"batch"``.
     """
-    if transcript is None and audio_bytes is None:
-        raise ValueError("Either audio_bytes or transcript must be provided.")
+    if transcript is None and audio_bytes is None and blob_name is None:
+        raise ValueError("Either audio_bytes, blob_name, or transcript must be provided.")
 
     await _update_job(
         job_id,
@@ -62,7 +65,10 @@ async def run_pipeline(
             logger.info("[%s] Step 1: Speech Transcription (mode=%s)", job_id, transcription_mode)
             t0 = time.monotonic()
             speech_agent = SpeechTranscriptionAgent()
-            content = await speech_agent.analyze(audio_bytes, filename, job_id=job_id, mode=transcription_mode)  # type: ignore[arg-type]
+            if blob_name is not None:
+                content = await speech_agent.analyze_from_blob(blob_name, filename, job_id=job_id, mode=transcription_mode)
+            else:
+                content = await speech_agent.analyze(audio_bytes, filename, job_id=job_id, mode=transcription_mode)  # type: ignore[arg-type]
             durations["step1"] = round(time.monotonic() - t0, 1)
         await _update_job(
             job_id,
@@ -120,6 +126,10 @@ async def run_pipeline(
                     input_kind = "transcript"
                     input_filename = "transcript.txt"
                     input_payload = (transcript.raw_transcript or "").encode("utf-8")
+                elif blob_name is not None:
+                    input_kind = "audio"
+                    input_filename = filename or "audio.wav"
+                    input_payload = b""  # already in Blob; no need to re-store
                 else:
                     input_kind = "audio"
                     input_filename = filename or "audio.wav"
@@ -141,6 +151,39 @@ async def run_pipeline(
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[%s] Failed to archive job to history: %s", job_id, exc)
+
+    except BatchTranscriptionTimeout as exc:
+        logger.warning("[%s] Batch Transcription timed out: %s", job_id, exc)
+        await _update_job(
+            job_id,
+            status=JobStatus.timeout,
+            message="音声解析がタイムアウトしました。履歴から状況を確認できます。",
+        )
+        # Save to history so the user can resume later.
+        try:
+            job = await get_job(job_id)
+            if job is not None:
+                if blob_name is not None:
+                    input_kind = "audio"
+                    input_filename = filename or "audio.wav"
+                    input_payload = b""
+                else:
+                    input_kind = "audio"
+                    input_filename = filename or "audio.wav"
+                    input_payload = audio_bytes or b""
+                await history_store.save_job(
+                    job_id=job_id,
+                    job_payload=job.model_dump(mode="json"),
+                    input_kind=input_kind,
+                    input_filename=input_filename,
+                    input_bytes=input_payload,
+                    title=f"(タイムアウト) 議事録 {job_id[:8]}",
+                    transcription_mode=transcription_mode,
+                    step_durations=durations,
+                    transcription_url=exc.transcription_url,
+                )
+        except Exception as save_exc:  # noqa: BLE001
+            logger.warning("[%s] Failed to save timeout job to history: %s", job_id, save_exc)
 
     except Exception as exc:  # noqa: BLE001
         logger.exception("[%s] Pipeline failed: %s", job_id, exc)

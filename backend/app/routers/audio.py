@@ -12,6 +12,7 @@ from app.agents.job_store import create_job, get_job
 from app.agents.pipeline import run_pipeline
 from app.config import get_settings
 from app.models.schemas import (
+    BlobUploadRequest,
     ContentAnalysisResult,
     JobResponse,
     JobResultResponse,
@@ -76,6 +77,43 @@ async def upload_audio(
     logger.info(
         "Job %s created for file %s (%d bytes, mode=%s)",
         job_id, file.filename, len(audio_bytes), transcription_mode.value,
+    )
+    return JobResponse(job_id=job_id, status=JobStatus.pending, message="処理を開始しました")
+
+
+@router.post(
+    "/audio/start-from-blob",
+    response_model=JobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Blob にアップロード済みの音声ファイルから議事録生成を開始する",
+)
+async def start_from_blob(
+    payload: BlobUploadRequest,
+    background_tasks: BackgroundTasks,
+) -> JobResponse:
+    blob_name = payload.blob_name.strip()
+    if not blob_name or ".." in blob_name:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="無効な blob_name です。",
+        )
+    ext = Path(payload.filename or "").suffix.lower()
+    if ext not in _ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=f"対応していないファイル形式です: {ext}",
+        )
+
+    job_id = await create_job()
+    background_tasks.add_task(
+        run_pipeline, job_id,
+        filename=payload.filename,
+        blob_name=blob_name,
+        transcription_mode=payload.transcription_mode.value,
+    )
+    logger.info(
+        "Job %s created from blob %s (mode=%s)",
+        job_id, blob_name, payload.transcription_mode.value,
     )
     return JobResponse(job_id=job_id, status=JobStatus.pending, message="処理を開始しました")
 

@@ -39,4 +39,14 @@ variable "frontend_memory" {
   default = "1Gi"
 }
 
+variable "storage_account_url" {
+  description = "Primary blob endpoint URL for frontend direct upload"
+  type        = string
+}
+
+variable "audio_container_name" {
+  description = "Blob container name for audio files"
+  type        = string
+}
+
 variable "tags" { type = map(string) }

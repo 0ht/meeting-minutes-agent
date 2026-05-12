@@ -58,6 +58,7 @@ class HistoryEntry:
     has_result: bool
     transcription_mode: str = ""   # "fast" | "batch" | ""
     step_durations: dict | None = None  # {"step1": 12.3, ...}
+    transcription_url: str = ""    # Batch Transcription URL (for resume)
 
 
 def _container() -> str:
@@ -95,6 +96,7 @@ async def save_job(
     title: str,
     transcription_mode: str = "",
     step_durations: dict[str, float] | None = None,
+    transcription_url: str = "",
 ) -> Optional[HistoryEntry]:
     """Persist a completed job and its original input to Blob Storage."""
     if not _enabled():
@@ -115,6 +117,7 @@ async def save_job(
         "input_blob": input_blob_name,
         "transcription_mode": transcription_mode,
         "step_durations": step_durations,
+        "transcription_url": transcription_url,
         "result": job_payload,
     }
 
@@ -134,6 +137,12 @@ async def save_job(
                 "input_filename": _encode_meta_value(input_filename[:256]),
                 "transcription_mode": transcription_mode,
             }
+            if step_durations:
+                blob_metadata["step_durations"] = _encode_meta_value(
+                    json.dumps(step_durations, default=str)
+                )
+            if transcription_url:
+                blob_metadata["transcription_url"] = _encode_meta_value(transcription_url)
 
             # 1. Upload input.
             await container.upload_blob(
@@ -156,7 +165,10 @@ async def save_job(
             input_kind=input_kind,
             input_filename=input_filename,
             input_blob=input_blob_name,
-            has_result=True,
+            has_result=not bool(transcription_url),
+            transcription_mode=transcription_mode,
+            step_durations=step_durations,
+            transcription_url=transcription_url,
         )
     except AzureError as exc:
         logger.exception("Failed to save history for %s: %s", job_id, exc)
@@ -183,6 +195,17 @@ async def list_entries(limit: int = 100) -> list[HistoryEntry]:
 
                     # Fast path: use blob metadata if present (new jobs).
                     if md.get("job_id"):
+                        # Restore step_durations from metadata if present.
+                        _sd_raw = md.get("step_durations")
+                        _sd: dict | None = None
+                        if _sd_raw:
+                            try:
+                                _sd = json.loads(_decode_meta_value(_sd_raw))
+                            except (json.JSONDecodeError, Exception):
+                                pass
+                        # Restore transcription_url from metadata if present.
+                        _tu_raw = md.get("transcription_url", "")
+                        _tu = _decode_meta_value(_tu_raw) if _tu_raw else ""
                         entries.append(
                             HistoryEntry(
                                 job_id=md.get("job_id", job_id),
@@ -191,9 +214,10 @@ async def list_entries(limit: int = 100) -> list[HistoryEntry]:
                                 input_kind=md.get("input_kind", "audio"),
                                 input_filename=_decode_meta_value(md.get("input_filename", "")),
                                 input_blob=f"{job_id}/input.bin",
-                                has_result=True,
+                                has_result=not bool(_tu),
                                 transcription_mode=md.get("transcription_mode", ""),
-                                step_durations=None,
+                                step_durations=_sd,
+                                transcription_url=_tu,
                             )
                         )
                         continue
@@ -212,9 +236,10 @@ async def list_entries(limit: int = 100) -> list[HistoryEntry]:
                             input_kind=meta.get("input_kind", "audio"),
                             input_filename=meta.get("input_filename", ""),
                             input_blob=meta.get("input_blob", ""),
-                            has_result=bool(meta.get("result")),
+                            has_result=bool(meta.get("result")) and not meta.get("transcription_url"),
                             transcription_mode=meta.get("transcription_mode", ""),
                             step_durations=meta.get("step_durations"),
+                            transcription_url=meta.get("transcription_url", ""),
                         )
                     )
             except ResourceNotFoundError:

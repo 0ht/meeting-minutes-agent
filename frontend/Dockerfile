@@ -24,6 +24,8 @@ CMD ["streamlit", "run", "app.py", \
      "--server.address=0.0.0.0", \
      "--server.headless=true", \
      "--server.enableCORS=false", \
-     "--server.enableXsrfProtection=true", \
+     "--server.enableXsrfProtection=false", \
      "--server.enableWebsocketCompression=false", \
+     "--server.maxUploadSize=500", \
+     "--server.maxMessageSize=500", \
      "--browser.gatherUsageStats=false"]

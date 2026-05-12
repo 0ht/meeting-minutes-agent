@@ -91,6 +91,10 @@ module "container_apps" {
   acr_id                  = module.container_registry.acr_id
   tags                    = local.tags
 
+  # Storage info for frontend direct upload
+  storage_account_url  = module.storage.primary_blob_endpoint
+  audio_container_name = module.storage.audio_container_name
+
   # Non-secret backend env vars
   backend_env = {
     AZURE_OPENAI_DEPLOYMENT     = module.ai_services.gpt_deployment_name
@@ -103,8 +107,8 @@ module "container_apps" {
     AZURE_SPEECH_ENDPOINT        = module.ai_services.speech_endpoint
     FOUNDRY_PROJECT_ENDPOINT    = module.ai_services.foundry_project_endpoint
     FOUNDRY_MODEL_DEPLOYMENT    = module.ai_services.gpt_deployment_name
-    MAX_AUDIO_SIZE_MB           = "100"
-    SPEECH_POLL_TIMEOUT_SECONDS = "300"
+    MAX_AUDIO_SIZE_MB           = "500"
+    SPEECH_POLL_TIMEOUT_SECONDS = "3600"
     SPEECH_POLL_INTERVAL_SECONDS = "5"
     # CORS — restrict to the frontend Container App's public FQDN.
     CORS_ALLOWED_ORIGINS        = "https://ca-frontend-${var.app_name}-${var.environment}.${module.container_apps.environment_default_domain}"
@@ -119,6 +123,15 @@ resource "azurerm_role_assignment" "backend_blob_contributor" {
   scope                = module.storage.account_id
   role_definition_name = "Storage Blob Data Contributor"
   principal_id         = module.container_apps.backend_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# ── RBAC: Frontend Managed Identity → Storage Blob Data Contributor ───────────
+# Frontend uploads audio files directly to Blob Storage.
+resource "azurerm_role_assignment" "frontend_blob_contributor" {
+  scope                = module.storage.account_id
+  role_definition_name = "Storage Blob Data Contributor"
+  principal_id         = module.container_apps.frontend_principal_id
   principal_type       = "ServicePrincipal"
 }
 

@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     terminology_cache_ttl_seconds: int = 300
 
     # ── App ──────────────────────────────────────────────────────────────────
-    max_audio_size_mb: int = 100
+    max_audio_size_mb: int = 500
     # Comma-separated list of allowed CORS origins.
     cors_allowed_origins: str = "http://localhost:8501"
     # How long (seconds) to poll the Batch Transcription job before giving up.

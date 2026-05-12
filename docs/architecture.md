@@ -14,16 +14,16 @@
 | エントリポイント | `app.py` |
 | Docker ベースイメージ | `python:3.12-slim` |
 | ポート | 8501 |
-| 主要依存 | `streamlit`, `requests`, `pandas`, `python-docx` |
+| 主要依存 | `streamlit`, `requests`, `pandas`, `python-docx`, `azure-identity`, `azure-storage-blob` |
 
 **主要機能**:
-- 音声ファイルのアップロード UI（ドラッグ & ドロップ / ファイル選択）
+- 音声ファイルのアップロード UI（ドラッグ & ドロップ / ファイル選択）— Blob Storage に直接アップロード（Managed Identity）
 - テキスト入力 UI（直接入力 / VTT・SRT・DOCX ファイルアップロード）
 - ブラウザ録音機能
 - ジョブ進捗のリアルタイム表示（ステータスポーリング）
 - 議事録の Markdown レンダリング＋ダウンロード
 - エージェント入出力の詳細パネル（Step 1〜4 の中間結果表示）
-- 履歴一覧・閲覧・削除
+- 履歴一覧・閲覧・削除・タイムアウト再開
 
 ### 1.2 バックエンド (`backend/`)
 
@@ -343,9 +343,10 @@ sequenceDiagram
     participant Agent as Foundry Agents
 
     User->>FE: 音声ファイル
-    FE->>BE: POST /api/v1/audio/upload
+    FE->>ST: audio-files/upload/{uuid}/filename に直接アップロード（Managed Identity）
+    FE->>BE: POST /api/v1/audio/start-from-blob {blob_name}
     BE-->>FE: 202 Accepted {job_id}
-    BE->>ST: audio-files/{job_id}/input.wav にアップロード
+    BE->>ST: Blob からダウンロード + WAV 正規化 + 再アップロード
     BE->>Speech: Fast or Batch Transcription API (Blob URL)
     Speech-->>BE: ContentAnalysisResult
     BE->>Agent: Step 2〜4 (script → minutes → terminology)

@@ -11,6 +11,7 @@ class JobStatus(str, Enum):
     processing = "processing"
     done = "done"
     error = "error"
+    timeout = "timeout"
 
 
 # ── Intermediate agent outputs ────────────────────────────────────────────────
@@ -69,6 +70,13 @@ class TranscriptRequest(BaseModel):
     transcript: str
     speakers: Optional[List[str]] = None
     language: Optional[str] = "ja"
+
+
+class BlobUploadRequest(BaseModel):
+    """Request body for starting a pipeline from an already-uploaded blob."""
+    blob_name: str
+    filename: str
+    transcription_mode: TranscriptionMode = TranscriptionMode.fast
 
 
 class JobResponse(BaseModel):

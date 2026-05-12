@@ -36,6 +36,17 @@ from app.models.schemas import ContentAnalysisResult
 logger = logging.getLogger(__name__)
 
 
+class BatchTranscriptionTimeout(TimeoutError):
+    """Raised when Batch Transcription polling exceeds the configured timeout.
+
+    Carries the ``transcription_url`` so callers can resume polling later.
+    """
+
+    def __init__(self, message: str, transcription_url: str) -> None:
+        super().__init__(message)
+        self.transcription_url = transcription_url
+
+
 class SpeechTranscriptionAgent:
     """Transcribes audio via Fast or Batch Transcription API."""
 
@@ -80,6 +91,51 @@ class SpeechTranscriptionAgent:
             )
 
         # 2. Transcribe via the selected mode
+        if mode == "batch":
+            return await self._transcribe_batch(endpoint, blob_url, job_id)
+        else:
+            return await self._transcribe_fast(endpoint, blob_url)
+
+    async def analyze_from_blob(
+        self,
+        blob_name: str,
+        filename: str,
+        *,
+        job_id: str | None = None,
+        mode: str = "fast",
+    ) -> ContentAnalysisResult:
+        """Transcribe audio that is already uploaded to Blob Storage.
+
+        The blob is downloaded, normalized to WAV, re-uploaded, and then
+        transcribed via the Speech API — same as ``analyze`` but skips the
+        initial upload from the caller's memory.
+        """
+        endpoint = self.settings.azure_speech_endpoint.rstrip("/")
+        if not endpoint:
+            logger.warning("Azure Speech endpoint not configured — returning mock transcript.")
+            return self._mock_result()
+
+        account_url = self.settings.azure_storage_account_url
+        container = self.settings.azure_storage_container
+        if not account_url:
+            raise RuntimeError("AZURE_STORAGE_ACCOUNT_URL is not configured.")
+
+        # Download from Blob
+        cred = get_async_credential()
+        svc = BlobServiceClient(account_url=account_url, credential=cred)
+        async with svc:
+            blob_client = svc.get_blob_client(container=container, blob=blob_name)
+            download = await blob_client.download_blob()
+            audio_bytes = await download.readall()
+
+        logger.info("Downloaded blob %s (%d bytes) for transcription", blob_name, len(audio_bytes))
+
+        # Normalize to WAV and re-upload
+        audio_bytes, filename = self._normalize_audio(audio_bytes, filename)
+        blob_url = await self._upload_to_blob(audio_bytes, filename, job_id=job_id)
+        if not blob_url:
+            raise RuntimeError("Blob re-upload failed after normalization.")
+
         if mode == "batch":
             return await self._transcribe_batch(endpoint, blob_url, job_id)
         else:
@@ -264,7 +320,10 @@ class SpeechTranscriptionAgent:
                 await asyncio.sleep(poll_interval)
                 elapsed += poll_interval
 
-        raise TimeoutError(f"Batch Transcription did not complete within {poll_timeout}s.")
+        raise BatchTranscriptionTimeout(
+            f"Batch Transcription did not complete within {poll_timeout}s.",
+            transcription_url=transcription_url,
+        )
 
     async def _batch_fetch_result(
         self, client: httpx.AsyncClient, headers: dict, data: dict[str, Any],
@@ -291,6 +350,37 @@ class SpeechTranscriptionAgent:
                 await client.delete(transcription_url, headers=headers)
         except Exception as exc:  # noqa: BLE001
             logger.warning("Failed to delete batch transcription %s: %s", transcription_url, exc)
+
+    async def check_batch_status(self, transcription_url: str) -> str:
+        """Check the current status of a Batch Transcription job.
+
+        Returns one of: ``"Running"``, ``"NotStarted"``, ``"Succeeded"``,
+        ``"Failed"``, or the raw status string from the API.
+        """
+        credential = get_async_credential()
+        token = await credential.get_token("https://cognitiveservices.azure.com/.default")
+        headers = {"Authorization": f"Bearer {token.token}"}
+        timeout = httpx.Timeout(connect=30.0, read=60.0, write=30.0, pool=30.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(transcription_url, headers=headers)
+            resp.raise_for_status()
+            return resp.json().get("status", "Unknown")
+
+    async def resume_batch(self, transcription_url: str) -> ContentAnalysisResult:
+        """Resume a previously timed-out Batch Transcription.
+
+        Polls until complete, fetches the result, and cleans up.
+        """
+        credential = get_async_credential()
+
+        async def _get_headers() -> dict[str, str]:
+            token = await credential.get_token("https://cognitiveservices.azure.com/.default")
+            return {"Authorization": f"Bearer {token.token}", "Content-Type": "application/json"}
+
+        result_data = await self._batch_poll(_get_headers, transcription_url)
+        headers = await _get_headers()
+        await self._batch_delete(headers, transcription_url)
+        return self._parse_batch_result(result_data)
 
     # ── response parsing (Fast Transcription format) ──────────────────────────
 

@@ -178,5 +178,5 @@ az storage blob upload \
 | Speech Phrase List | Fast Transcription API は `phraseList` 未対応。用語正規化は LLM エージェントに委任 |
 | 音声正規化 | pydub (ffmpeg) で 16 kHz / 16-bit / mono WAV にリサンプル。失敗時はオリジナルで送信 |
 | Storage コンテナ作成 | `Storage Blob Data Contributor` ロールではコンテナ作成不可。新規コンテナは Terraform で宣言 |
-| 長時間音声 | Fast Transcription タイムアウトは httpx で最大 30 分 (read=1800s)。Batch はポーリング最大 1800s |
+| 長時間音声 | Fast Transcription タイムアウトは httpx で最大 30 分 (read=1800s)。Batch はポーリング最大 3600s（1 時間）。タイムアウト時は履歴に `timeout` ステータスで保存され、後から「状況確認」「再開」が可能 |
 | Batch Transcription | AIServices kind のアカウントで動作確認済み。API バージョン `2025-10-15` + `:submit` パスが必要 |

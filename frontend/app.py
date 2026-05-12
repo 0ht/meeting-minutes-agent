@@ -10,14 +10,19 @@ import io
 import os
 import re
 import time
+import uuid
 from datetime import datetime
 from typing import Optional
 
 import requests
 import streamlit as st
+from azure.identity import ManagedIdentityCredential, DefaultAzureCredential
+from azure.storage.blob import BlobServiceClient
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://localhost:8000").rstrip("/")
+AZURE_STORAGE_ACCOUNT_URL = os.environ.get("AZURE_STORAGE_ACCOUNT_URL", "")
+AZURE_STORAGE_CONTAINER = os.environ.get("AZURE_STORAGE_CONTAINER", "audio-files")
 POLL_INTERVAL = int(os.environ.get("POLL_INTERVAL_SECONDS", "3"))
 # Max wait time for the whole pipeline. Long audio + 3 LLM stages can easily
 # exceed 5 minutes, so default to 60 minutes worth of polls.
@@ -369,13 +374,37 @@ for k, v in _DEFAULTS.items():
 # ── API helpers ───────────────────────────────────────────────────────────────
 
 
+@st.cache_resource
+def _get_blob_service_client() -> BlobServiceClient:
+    """Return a cached BlobServiceClient using Managed Identity."""
+    try:
+        cred = ManagedIdentityCredential()
+    except Exception:
+        cred = DefaultAzureCredential()
+    return BlobServiceClient(account_url=AZURE_STORAGE_ACCOUNT_URL, credential=cred)
+
+
+def _upload_to_blob(audio_bytes: bytes, filename: str) -> str:
+    """Upload audio directly to Blob Storage and return the blob name."""
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else "bin"
+    blob_name = f"upload/{uuid.uuid4()}/{filename}"
+    svc = _get_blob_service_client()
+    blob_client = svc.get_blob_client(container=AZURE_STORAGE_CONTAINER, blob=blob_name)
+    blob_client.upload_blob(audio_bytes, overwrite=True)
+    return blob_name
+
+
 def api_submit(audio_bytes: bytes, filename: str, mime: str, transcription_mode: str = "fast") -> str:
-    """Upload audio to backend and return job_id."""
+    """Upload audio to Blob Storage, then tell backend to start the pipeline."""
+    blob_name = _upload_to_blob(audio_bytes, filename)
     resp = requests.post(
-        f"{BACKEND_URL}/api/v1/audio/upload",
-        files={"file": (filename, io.BytesIO(audio_bytes), mime)},
-        data={"transcription_mode": transcription_mode},
-        timeout=300,
+        f"{BACKEND_URL}/api/v1/audio/start-from-blob",
+        json={
+            "blob_name": blob_name,
+            "filename": filename,
+            "transcription_mode": transcription_mode,
+        },
+        timeout=30,
     )
     resp.raise_for_status()
     return resp.json()["job_id"]
@@ -447,6 +476,28 @@ def api_delete_history(job_id: str) -> bool:
     except requests.RequestException as exc:
         st.error(f"履歴の削除に失敗しました: {exc}")
         return False
+
+
+def api_check_transcription_status(job_id: str) -> str | None:
+    """Check Speech API status of a timed-out batch transcription."""
+    try:
+        resp = requests.get(f"{BACKEND_URL}/api/v1/history/{job_id}/transcription-status", timeout=30)
+        resp.raise_for_status()
+        return resp.json().get("speech_status", "Unknown")
+    except requests.RequestException as exc:
+        st.error(f"ステータス確認に失敗しました: {exc}")
+        return None
+
+
+def api_resume_transcription(job_id: str) -> str | None:
+    """Resume a timed-out batch transcription. Returns new job_id."""
+    try:
+        resp = requests.post(f"{BACKEND_URL}/api/v1/history/{job_id}/resume", timeout=30)
+        resp.raise_for_status()
+        return resp.json().get("job_id")
+    except requests.RequestException as exc:
+        st.error(f"再開に失敗しました: {exc}")
+        return None
 
 
 # ── Transcript file parsers ───────────────────────────────────────────────────
@@ -657,7 +708,7 @@ def page_input() -> None:
                     st.warning("このバージョンは audio_input 非対応です。アップロードタブをお使いください。")
 
             with tab_upload:
-                st.caption("WAV, MP3, MP4, M4A, OGG, WebM, FLAC（最大 100 MB）")
+                st.caption("WAV, MP3, MP4, M4A, OGG, WebM, FLAC（最大 500 MB）")
                 uploaded = st.file_uploader(
                     "ファイルを選択またはドロップ",
                     type=["wav", "mp3", "mp4", "m4a", "ogg", "webm", "flac"],
@@ -667,8 +718,7 @@ def page_input() -> None:
                     audio_bytes = uploaded.read()
                     filename = uploaded.name
                     mime = uploaded.type or "audio/wav"
-                    st.audio(audio_bytes, format=mime)
-                    st.info(f"**{filename}**（{len(audio_bytes)/1024:.1f} KB）")
+                    st.info(f"**{filename}**（{len(audio_bytes)/1024/1024:.1f} MB）")
 
             with tab_text:
                 st.caption("文字起こし済みテキストを貼り付け。話者：発言内容 の形式推奨")
@@ -823,93 +873,136 @@ def _render_history_section() -> None:
             dur_breakdown = f"（{'／'.join(dur_parts)}）" if dur_parts else ""
 
             with st.container(border=True):
+                is_timeout = bool(it.get("transcription_url"))
                 st.markdown(
                     f"**{title}**  \n"
                     f"<span style='color:#605e5c;font-size:0.82rem;'>"
                     f"{created_disp} ・ {kind_label}（{input_filename}）{tmode_label}"
-                    f" ・ <code>{jid[:8]}</code></span>",
+                    f" ・ <code>{jid[:8]}</code>"
+                    f"{'  ・ <b style=\"color:#a4262c;\">タイムアウト</b>' if is_timeout else ''}"
+                    f"</span>",
                     unsafe_allow_html=True,
                 )
                 if dur_total:
                     st.caption(f"{dur_total} {dur_breakdown}")
 
-                # Pre-fetch markdown + input lazily, cached per session.
-                md_key = f"_md_{jid}"
-                if md_key not in st.session_state:
-                    meta = api_get_history(jid)
-                    final = (meta or {}).get("result", {}).get("final_minutes") or {}
-                    st.session_state[md_key] = final.get("markdown") or ""
-                in_key = f"_in_{jid}"
-                if in_key not in st.session_state:
-                    payload = api_get_history_input(jid)
-                    st.session_state[in_key] = payload  # tuple or None
-
-                md_data = st.session_state.get(md_key) or ""
-                in_payload = st.session_state.get(in_key)
-
-                c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
-                with c1:
-                    if st.button("開く", key=f"open_{jid}", use_container_width=True):
-                        meta = api_get_history(jid)
-                        if meta:
-                            result = meta.get("result", {})
-                            st.session_state.job_result = result
-                            st.session_state.job_id = jid
-                            st.session_state.input_mode = (
-                                "transcript" if kind == "transcript" else "audio"
-                            )
-                            st.session_state.page = "result"
-                            st.rerun()
-                with c2:
-                    st.download_button(
-                        "議事録MD",
-                        data=md_data.encode("utf-8") if md_data else b"",
-                        file_name=f"minutes_{jid[:8]}.md",
-                        mime="text/markdown",
-                        key=f"dl_md_{jid}",
-                        use_container_width=True,
-                        disabled=not md_data,
-                    )
-                with c3:
-                    if in_payload:
-                        data, fname, mime_ = in_payload
-                        st.download_button(
-                            "入力ファイル",
-                            data=data,
-                            file_name=fname,
-                            mime=mime_,
-                            key=f"dl_in_{jid}",
-                            use_container_width=True,
-                        )
-                    else:
-                        st.button(
-                            "入力ファイル",
-                            key=f"dl_in_disabled_{jid}",
-                            use_container_width=True,
-                            disabled=True,
-                        )
-                with c4:
-                    confirm_key = f"_del_confirm_{jid}"
-                    if st.session_state.get(confirm_key):
-                        if st.button(
-                            "本当に削除",
-                            key=f"del_yes_{jid}",
-                            use_container_width=True,
-                            type="primary",
-                        ):
-                            if api_delete_history(jid):
-                                # Purge caches and reload list.
-                                for k in (md_key, in_key, confirm_key, "_history_items"):
-                                    st.session_state.pop(k, None)
+                if is_timeout:
+                    # Timed-out job: show status check & resume buttons
+                    tc1, tc2, tc3 = st.columns([1, 1, 1])
+                    with tc1:
+                        if st.button("状況確認", key=f"check_{jid}", use_container_width=True):
+                            speech_status = api_check_transcription_status(jid)
+                            if speech_status:
+                                if speech_status == "Succeeded":
+                                    st.success(f"文字起こし完了（{speech_status}）— 「再開」で議事録を生成できます")
+                                elif speech_status in ("Running", "NotStarted"):
+                                    st.info(f"文字起こし進行中（{speech_status}）")
+                                elif speech_status == "Failed":
+                                    st.error(f"文字起こし失敗（{speech_status}）")
+                                else:
+                                    st.warning(f"ステータス: {speech_status}")
+                    with tc2:
+                        if st.button("再開", key=f"resume_{jid}", use_container_width=True, type="primary"):
+                            new_job_id = api_resume_transcription(jid)
+                            if new_job_id:
+                                st.session_state.job_id = new_job_id
+                                st.session_state.input_mode = "audio"
+                                st.session_state.page = "processing"
+                                # Clear history cache
+                                for k in list(st.session_state.keys()):
+                                    if k == "_history_items" or k.startswith("_md_") or k.startswith("_in_"):
+                                        st.session_state.pop(k, None)
                                 st.rerun()
-                    else:
-                        if st.button(
-                            "削除",
-                            key=f"del_{jid}",
+                    with tc3:
+                        confirm_key = f"_del_confirm_{jid}"
+                        if st.session_state.get(confirm_key):
+                            if st.button("本当に削除", key=f"del2_{jid}", use_container_width=True):
+                                if api_delete_history(jid):
+                                    st.session_state.pop(confirm_key, None)
+                                    st.session_state.pop("_history_items", None)
+                                    st.rerun()
+                        else:
+                            if st.button("削除", key=f"del1_{jid}", use_container_width=True):
+                                st.session_state[confirm_key] = True
+                                st.rerun()
+                else:
+                    # Normal completed job
+                    # Pre-fetch markdown + input lazily, cached per session.
+                    md_key = f"_md_{jid}"
+                    if md_key not in st.session_state:
+                        meta = api_get_history(jid)
+                        final = (meta or {}).get("result", {}).get("final_minutes") or {}
+                        st.session_state[md_key] = final.get("markdown") or ""
+                    in_key = f"_in_{jid}"
+                    if in_key not in st.session_state:
+                        payload = api_get_history_input(jid)
+                        st.session_state[in_key] = payload  # tuple or None
+
+                    md_data = st.session_state.get(md_key) or ""
+                    in_payload = st.session_state.get(in_key)
+
+                    c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
+                    with c1:
+                        if st.button("開く", key=f"open_{jid}", use_container_width=True):
+                            meta = api_get_history(jid)
+                            if meta:
+                                result = meta.get("result", {})
+                                st.session_state.job_result = result
+                                st.session_state.job_id = jid
+                                st.session_state.input_mode = (
+                                    "transcript" if kind == "transcript" else "audio"
+                                )
+                                st.session_state.page = "result"
+                                st.rerun()
+                    with c2:
+                        st.download_button(
+                            "議事録MD",
+                            data=md_data.encode("utf-8") if md_data else b"",
+                            file_name=f"minutes_{jid[:8]}.md",
+                            mime="text/markdown",
+                            key=f"dl_md_{jid}",
                             use_container_width=True,
-                        ):
-                            st.session_state[confirm_key] = True
-                            st.rerun()
+                            disabled=not md_data,
+                        )
+                    with c3:
+                        if in_payload:
+                            data, fname, mime_ = in_payload
+                            st.download_button(
+                                "入力ファイル",
+                                data=data,
+                                file_name=fname,
+                                mime=mime_,
+                                key=f"dl_in_{jid}",
+                                use_container_width=True,
+                            )
+                        else:
+                            st.button(
+                                "入力ファイル",
+                                key=f"dl_in_disabled_{jid}",
+                                use_container_width=True,
+                                disabled=True,
+                            )
+                    with c4:
+                        confirm_key = f"_del_confirm_{jid}"
+                        if st.session_state.get(confirm_key):
+                            if st.button(
+                                "本当に削除",
+                                key=f"del_yes_{jid}",
+                                use_container_width=True,
+                                type="primary",
+                            ):
+                                if api_delete_history(jid):
+                                    for k in (md_key, in_key, confirm_key, "_history_items"):
+                                        st.session_state.pop(k, None)
+                                    st.rerun()
+                        else:
+                            if st.button(
+                                "削除",
+                                key=f"del_{jid}",
+                                use_container_width=True,
+                            ):
+                                st.session_state[confirm_key] = True
+                                st.rerun()
 
 
 def page_processing() -> None:
