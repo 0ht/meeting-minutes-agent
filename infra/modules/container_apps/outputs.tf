@@ -32,3 +32,8 @@ output "backend_principal_id" {
   description = "System-assigned Managed Identity principal ID of the backend Container App"
   value       = azurerm_container_app.backend.identity[0].principal_id
 }
+
+output "frontend_principal_id" {
+  description = "System-assigned Managed Identity principal ID of the frontend Container App"
+  value       = azurerm_container_app.frontend.identity[0].principal_id
+}

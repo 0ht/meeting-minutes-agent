@@ -1,6 +1,6 @@
 # Meeting Minutes Agent — 要件定義
 
-> **最終更新日**: 2026-05-11
+> **最終更新日**: 2026-05-12
 
 ---
 
@@ -14,7 +14,7 @@
 
 ```
 音声ファイル / テキスト
-  └─► [音声解析エージェント]              … Azure Speech Fast Transcription で文字起こし（話者分離対応）
+  └─► [音声解析エージェント]              … Azure Speech Fast / Batch Transcription で文字起こし（話者分離対応）
         └─► [スクリプト生成エージェント]     … 読みやすい会議スクリプトを作成
               └─► [議事録作成エージェント]   … 決定事項・アクションアイテム等を整理
                     └─► [用語補足エージェント] … 業界/社内用語の用語集を付加
@@ -29,19 +29,28 @@ graph TD
         Backend["FastAPI Backend<br/>内部イングレスのみ / Port 8000<br/>System Managed Identity"]
     end
 
-    Foundry["Azure AI Foundry (AIServices)<br/>・GPT-5.4<br/>・Prompt Agents ×3<br/>・Speech Fast Transcription"]
+    Foundry["Azure AI Foundry (AIServices)<br/>・GPT-5.4<br/>・Prompt Agents ×3<br/>・Speech Fast / Batch Transcription"]
 
     subgraph Storage["Azure Blob Storage<br/>network_rules: Deny + AzureServices bypass"]
         Blob["Containers:<br/>・audio-files<br/>・terms<br/>・history"]
     end
 
-    PE["Private Endpoint + Private DNS Zone"]
+    subgraph PE["Private Endpoints<br/>snet-private-endpoints (10.0.2.0/24)"]
+        PE_BLOB["pe-blob-*"]
+        PE_COG["pe-cognitive-*"]
+        PE_ACR["pe-acr-*"]
+    end
+
+    ACR["Azure Container Registry<br/>Premium SKU<br/>public_network_access: false"]
 
     Internet -- HTTPS --> Frontend
     Frontend -- "内部ネットワーク" --> Backend
-    Backend -- "Managed Identity" --> Foundry
-    Backend -- "Managed Identity" --> PE
-    PE -- "Private Link" --> Storage
+    Backend -- "Managed Identity" --> PE_COG
+    PE_COG -- "Private Link" --> Foundry
+    Backend -- "Managed Identity" --> PE_BLOB
+    PE_BLOB -- "Private Link" --> Storage
+    CAE -- "イメージプル (AcrPull)" --> PE_ACR
+    PE_ACR -- "Private Link" --> ACR
 ```
 
 ---
@@ -60,7 +69,8 @@ graph TD
 
 | 機能 | 説明 |
 |------|------|
-| 話者分離 | Azure Speech Fast Transcription による最大 10 名の話者識別 |
+| 話者分離 | Azure Speech Fast / Batch Transcription による最大 10 名の話者識别 |
+| 文字起こしモード選択 | Fast（同期・高速）と Batch（非同期・大量処理向け）をフロントエンドのトグルで切り替え |
 | 4 段パイプライン | 音声解析 → スクリプト整形 → 議事録生成 → 用語補足 |
 | 用語正規化 | Blob Storage 上の辞書を Function Calling ツールで参照し、表記統一＋インライン注釈 |
 | 非同期処理 | ジョブベースのポーリング方式（HTTP 202 → ステータスポーリング → 完了） |
@@ -101,8 +111,10 @@ graph TD
 |------|------|
 | 認証 | すべての Azure サービス接続は Managed Identity (DefaultAzureCredential)。API キー・SAS トークン不使用 |
 | ストレージ | `shared_access_key_enabled = false`、`network_rules: Deny + AzureServices bypass`、Private Endpoint 経由 |
-| ネットワーク | Backend は内部イングレスのみ（インターネット非公開）。Frontend のみ外部公開 |
-| RBAC | Backend MI に最小権限の 4 ロールを割り当て（Storage Blob Data Contributor / Cognitive Services User / Azure AI User / Cognitive Services OpenAI User） |
+| ネットワーク | Backend は内部イングレスのみ（インターネット非公開）。Frontend のみ外部公開。Storage / AI Services / ACR はすべて `public_network_access_enabled = false` + Private Endpoint 経由 |
+| RBAC (Backend MI) | 最小権限の 5 ロール: Storage Blob Data Contributor / Cognitive Services User / Azure AI User / Cognitive Services OpenAI User / AcrPull |
+| RBAC (Frontend MI) | AcrPull（コンテナイメージプル） |
+| RBAC (AI Services MI) | Storage Blob Data Reader（Blob 上の音声ファイル読み取り） |
 
 ### 3.2 可用性・スケーリング
 
@@ -118,7 +130,7 @@ graph TD
 |------|-----|
 | 音声ファイル上限 | 100MB |
 | 音声長上限 | diarization 有効時 2 時間未満（Fast）/ 240 分（Batch） |
-| Speech タイムアウト | httpx read=1800s（30 分） |
+| Speech タイムアウト | Fast: httpx read=1800s（30 分）、Batch: ポーリング最大 1800s（30 分） |
 | GPT モデル | GPT-5.4、GlobalStandard SKU、30K TPM |
 | 用語辞書キャッシュ TTL | 300 秒 |
 
@@ -139,14 +151,14 @@ graph TD
 | フロントエンド | Python / Streamlit 1.31+ |
 | バックエンド | Python / FastAPI 0.111+ / Uvicorn |
 | 言語モデル | Azure OpenAI GPT-5.4（Microsoft Foundry 経由） |
-| 音声解析 | Azure Speech Fast Transcription API (2025-10-15) |
+| 音声解析 | Azure Speech Fast Transcription API / Batch Transcription API (2025-10-15) |
 | エージェント基盤 | Microsoft Foundry Prompt Agent + Responses API |
 | ストレージ | Azure Blob Storage（MI 認証） |
 | コンテナ | Azure Container Apps（Consumption ワークロードプロファイル） |
 | ネットワーク | Azure VNet 統合 + 内部イングレス + Private Endpoint |
 | IaC | Terraform（azurerm + azapi プロバイダー） |
 | 認証 | Managed Identity (DefaultAzureCredential) |
-| コンテナレジストリ | Azure Container Registry |
+| コンテナレジストリ | Azure Container Registry (Premium SKU、Private Endpoint 経由) |
 
 ---
 
@@ -162,7 +174,7 @@ graph TD
 |------|----|
 | Content-Type | `multipart/form-data` |
 | レスポンス | `202 Accepted` |
-| ボディ | `file` (音声ファイル) |
+| ボディ | `file` (音声ファイル), `transcription_mode` (オプション: `fast` / `batch`, デフォルト `fast`) |
 
 **レスポンス例**:
 ```json

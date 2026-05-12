@@ -55,6 +55,13 @@ class TerminologyEnhancedResult(BaseModel):
     glossary: List[dict]   # {"term": str, "definition": str}
 
 
+# ── Transcription mode ─────────────────────────────────────────────────────────
+
+class TranscriptionMode(str, Enum):
+    fast = "fast"
+    batch = "batch"
+
+
 # ── API request / response ────────────────────────────────────────────────────
 
 class TranscriptRequest(BaseModel):
@@ -74,6 +81,8 @@ class JobResultResponse(BaseModel):
     job_id: str
     status: JobStatus
     message: Optional[str] = None
+    # Elapsed seconds per pipeline step {"step1": 12.3, "step2": 5.1, ...}
+    step_durations: Optional[dict] = None
     # populated when status == "done"
     content_analysis: Optional[ContentAnalysisResult] = None
     script: Optional[ScriptResult] = None

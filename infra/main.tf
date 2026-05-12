@@ -1,7 +1,7 @@
 locals {
   tags = {
     project     = "meeting-minutes-agent"
-    environment = var.tag_environment
+    environment = var.environment
     managed_by  = "terraform"
   }
 }
@@ -26,6 +26,10 @@ module "ai_services" {
   openai_model_version       = var.openai_model_version
   openai_deployment_capacity = var.openai_deployment_capacity
   tags                       = local.tags
+
+  # Private Endpoint — allows Container Apps to reach AI Services inside the VNet
+  vnet_id                    = module.networking.vnet_id
+  private_endpoint_subnet_id = module.networking.private_endpoints_subnet_id
 }
 
 # ── Storage ───────────────────────────────────────────────────────────────────
@@ -68,6 +72,10 @@ module "container_registry" {
   environment         = var.environment
   acr_sku             = var.acr_sku
   tags                = local.tags
+
+  # Private Endpoint — allows Container Apps to pull images inside the VNet
+  vnet_id                    = module.networking.vnet_id
+  private_endpoint_subnet_id = module.networking.private_endpoints_subnet_id
 }
 
 # ── Container Apps (Streamlit frontend + FastAPI backend) ──────────────────────
@@ -80,10 +88,7 @@ module "container_apps" {
   environment             = var.environment
   container_apps_subnet_id = module.networking.container_apps_subnet_id
   acr_login_server        = module.container_registry.login_server
-  acr_username            = module.container_registry.admin_username
-  acr_password            = module.container_registry.admin_password
-  backend_image           = "${module.container_registry.login_server}/${var.backend_image_repo}:${var.backend_image_tag}"
-  frontend_image          = "${module.container_registry.login_server}/${var.frontend_image_repo}:${var.frontend_image_tag}"
+  acr_id                  = module.container_registry.acr_id
   tags                    = local.tags
 
   # Non-secret backend env vars
@@ -101,6 +106,8 @@ module "container_apps" {
     MAX_AUDIO_SIZE_MB           = "100"
     SPEECH_POLL_TIMEOUT_SECONDS = "300"
     SPEECH_POLL_INTERVAL_SECONDS = "5"
+    # CORS — restrict to the frontend Container App's public FQDN.
+    CORS_ALLOWED_ORIGINS        = "https://ca-frontend-${var.app_name}-${var.environment}.${module.container_apps.environment_default_domain}"
   }
 
   # No more API key secrets needed — authentication via Managed Identity
@@ -140,5 +147,16 @@ resource "azurerm_role_assignment" "backend_openai_user" {
   scope                = module.ai_services.foundry_account_id
   role_definition_name = "Cognitive Services OpenAI User"
   principal_id         = module.container_apps.backend_principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+# ── RBAC: AI Services Managed Identity → Storage Blob Data Reader ────────────
+# Batch Transcription reads audio files from Blob Storage using the Foundry
+# (AI Services) account's system-assigned Managed Identity.  The storage
+# account allows trusted Azure services via network_rules bypass.
+resource "azurerm_role_assignment" "foundry_blob_reader" {
+  scope                = module.storage.account_id
+  role_definition_name = "Storage Blob Data Reader"
+  principal_id         = module.ai_services.foundry_principal_id
   principal_type       = "ServicePrincipal"
 }

@@ -10,8 +10,16 @@ resource "azurerm_storage_account" "main" {
   account_tier                  = var.storage_account_tier
   account_replication_type      = var.storage_replication_type
   shared_access_key_enabled     = false
-  public_network_access_enabled = false
+  # Public access is denied by default via network_rules.default_action = "Deny".
+  # bypass = ["AzureServices"] allows trusted Azure services (e.g. Cognitive
+  # Services / Batch Transcription) to read blobs using their managed identity.
+  public_network_access_enabled = true
   tags                          = var.tags
+
+  network_rules {
+    default_action = "Deny"
+    bypass         = ["AzureServices"]
+  }
 
   blob_properties {
     delete_retention_policy {

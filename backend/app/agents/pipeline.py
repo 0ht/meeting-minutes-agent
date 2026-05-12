@@ -9,19 +9,17 @@ Pipeline:
 """
 from __future__ import annotations
 
-import asyncio
 import logging
-import uuid
-from typing import Dict
+import time
 
 from app.agents.speech_transcription import SpeechTranscriptionAgent
 from app.agents import history_store
+from app.agents.job_store import create_job, get_job, update_job as _update_job
 from app.agents.minutes_agent import MinutesAgent
 from app.agents.script_agent import ScriptAgent
 from app.agents.terminology_agent import TerminologyAgent
 from app.models.schemas import (
     ContentAnalysisResult,
-    JobResultResponse,
     JobStatus,
     MinutesResult,
     ScriptResult,
@@ -30,43 +28,19 @@ from app.models.schemas import (
 
 logger = logging.getLogger(__name__)
 
-# In-memory job store (use Redis / DB in production)
-_jobs: Dict[str, JobResultResponse] = {}
-_jobs_lock = asyncio.Lock()
-
-
-async def _update_job(job_id: str, **kwargs: object) -> None:
-    async with _jobs_lock:
-        job = _jobs.get(job_id)
-        if job:
-            for k, v in kwargs.items():
-                setattr(job, k, v)
-
-
-async def create_job() -> str:
-    """Create a new job entry and return its ID."""
-    job_id = str(uuid.uuid4())
-    async with _jobs_lock:
-        _jobs[job_id] = JobResultResponse(job_id=job_id, status=JobStatus.pending)
-    return job_id
-
-
-async def get_job(job_id: str) -> JobResultResponse | None:
-    """Retrieve a job by ID."""
-    async with _jobs_lock:
-        return _jobs.get(job_id)
-
 
 async def run_pipeline(
     job_id: str,
     audio_bytes: bytes | None = None,
     filename: str = "audio.wav",
     transcript: ContentAnalysisResult | None = None,
+    transcription_mode: str = "fast",
 ) -> None:
     """Run the full agent pipeline in the background for *job_id*.
 
     Either *audio_bytes* or *transcript* must be supplied. If *transcript* is
     given, Step 1 (Speech Transcription) is skipped.
+    *transcription_mode* is ``"fast"`` or ``"batch"``.
     """
     if transcript is None and audio_bytes is None:
         raise ValueError("Either audio_bytes or transcript must be provided.")
@@ -78,51 +52,65 @@ async def run_pipeline(
     )
 
     try:
+        durations: dict[str, float] = {}
+
         # ── Step 1: Speech Transcription ──────────────────────────────────────
         if transcript is not None:
             logger.info("[%s] Step 1: Skipped (transcript provided)", job_id)
             content = transcript
         else:
-            logger.info("[%s] Step 1: Speech Transcription", job_id)
+            logger.info("[%s] Step 1: Speech Transcription (mode=%s)", job_id, transcription_mode)
+            t0 = time.monotonic()
             speech_agent = SpeechTranscriptionAgent()
-            content = await speech_agent.analyze(audio_bytes, filename)  # type: ignore[arg-type]
+            content = await speech_agent.analyze(audio_bytes, filename, job_id=job_id, mode=transcription_mode)  # type: ignore[arg-type]
+            durations["step1"] = round(time.monotonic() - t0, 1)
         await _update_job(
             job_id,
             content_analysis=content,
+            step_durations=durations.copy(),
             message="スクリプトを生成中...",
         )
 
         # ── Step 2: Script generation ─────────────────────────────────────────
         logger.info("[%s] Step 2: Script Agent", job_id)
+        t0 = time.monotonic()
         script_agent = ScriptAgent()
         script: ScriptResult = await script_agent.generate(content)
+        durations["step2"] = round(time.monotonic() - t0, 1)
         await _update_job(
             job_id,
             script=script,
+            step_durations=durations.copy(),
             message="議事録を作成中...",
         )
 
         # ── Step 3: Minutes creation ──────────────────────────────────────────
         logger.info("[%s] Step 3: Minutes Agent", job_id)
+        t0 = time.monotonic()
         minutes_agent = MinutesAgent()
         minutes: MinutesResult = await minutes_agent.generate(script)
+        durations["step3"] = round(time.monotonic() - t0, 1)
         await _update_job(
             job_id,
             minutes=minutes,
+            step_durations=durations.copy(),
             message="用語を補足中...",
         )
 
         # ── Step 4: Terminology enrichment ────────────────────────────────────
         logger.info("[%s] Step 4: Terminology Agent", job_id)
+        t0 = time.monotonic()
         term_agent = TerminologyAgent()
         final: TerminologyEnhancedResult = await term_agent.enhance(minutes)
+        durations["step4"] = round(time.monotonic() - t0, 1)
         await _update_job(
             job_id,
             final_minutes=final,
+            step_durations=durations.copy(),
             status=JobStatus.done,
             message="完了しました",
         )
-        logger.info("[%s] Pipeline complete", job_id)
+        logger.info("[%s] Pipeline complete — durations: %s", job_id, durations)
 
         # ── Persist to history (best-effort; failure is non-fatal) ────────────
         try:
@@ -148,6 +136,8 @@ async def run_pipeline(
                     input_filename=input_filename,
                     input_bytes=input_payload,
                     title=title,
+                    transcription_mode=transcription_mode,
+                    step_durations=durations,
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("[%s] Failed to archive job to history: %s", job_id, exc)
@@ -157,5 +147,5 @@ async def run_pipeline(
         await _update_job(
             job_id,
             status=JobStatus.error,
-            message=f"エラーが発生しました: {exc}",
+            message="パイプライン処理中にエラーが発生しました。詳細はサーバーログを確認してください。",
         )

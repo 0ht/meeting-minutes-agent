@@ -1,5 +1,10 @@
 locals {
   suffix = "${var.app_name}-${var.environment}"
+
+  # Public placeholder image — used on initial creation. After the
+  # postprovision hook configures MI-based registry and azd deploy pushes
+  # the real image, Terraform never touches the image again (ignore_changes).
+  placeholder_image = "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
 }
 
 # ── Log Analytics Workspace (required for Container Apps Environment) ─────────
@@ -13,17 +18,12 @@ resource "azurerm_log_analytics_workspace" "main" {
 }
 
 # ── Container Apps Environment ────────────────────────────────────────────────
-# Deployed inside the VNet for private networking.
-# internal_load_balancer_enabled = false  → the environment has a public IP so
-# that the frontend Container App can expose an external ingress endpoint.
-# The backend Container App sets external_enabled = false to remain private.
 resource "azurerm_container_app_environment" "main" {
   name                           = "cae-${local.suffix}"
   location                       = var.location
   resource_group_name            = var.resource_group_name
   log_analytics_workspace_id     = azurerm_log_analytics_workspace.main.id
   infrastructure_subnet_id       = var.container_apps_subnet_id
-  # false = external environment (required to allow the frontend to be public)
   internal_load_balancer_enabled = false
   tags                           = var.tags
 
@@ -33,37 +33,28 @@ resource "azurerm_container_app_environment" "main" {
   }
 
   lifecycle {
-    # azurerm 4.x re-reads infrastructure_resource_group_name as null on
-    # Consumption-only environments and would force replacement otherwise.
     ignore_changes = [infrastructure_resource_group_name]
   }
 }
 
 # ── Backend Container App — internal ingress only ─────────────────────────────
+# Registry and image are managed outside Terraform:
+#   - postprovision hook: `az containerapp registry set --identity system`
+#   - azd deploy: pushes ACR image and updates the container
 resource "azurerm_container_app" "backend" {
   name                         = "ca-backend-${local.suffix}"
   container_app_environment_id = azurerm_container_app_environment.main.id
   resource_group_name          = var.resource_group_name
   revision_mode                = "Single"
   workload_profile_name        = "Consumption"
-  tags                         = var.tags
+  tags                         = merge(var.tags, { "azd-service-name" = "backend" })
 
   identity {
     type = "SystemAssigned"
   }
 
-  registry {
-    server               = var.acr_login_server
-    username             = var.acr_username
-    password_secret_name = "acr-password"
-  }
+  # No registry block — configured by postprovision hook via CLI.
 
-  secret {
-    name  = "acr-password"
-    value = var.acr_password
-  }
-
-  # Additional secrets (API keys, connection strings, …)
   dynamic "secret" {
     for_each = nonsensitive(var.backend_secrets)
     content {
@@ -73,7 +64,6 @@ resource "azurerm_container_app" "backend" {
   }
 
   ingress {
-    # Internal only — not reachable from the public internet
     external_enabled = false
     target_port      = 8000
     transport        = "http"
@@ -89,11 +79,10 @@ resource "azurerm_container_app" "backend" {
 
     container {
       name   = "backend"
-      image  = var.backend_image
+      image  = local.placeholder_image
       cpu    = var.backend_cpu
       memory = var.backend_memory
 
-      # Non-secret env vars
       dynamic "env" {
         for_each = var.backend_env
         content {
@@ -102,7 +91,6 @@ resource "azurerm_container_app" "backend" {
         }
       }
 
-      # Secret env vars — reference by secret name
       dynamic "env" {
         for_each = nonsensitive(var.backend_secrets)
         content {
@@ -121,6 +109,11 @@ resource "azurerm_container_app" "backend" {
       }
     }
   }
+
+  lifecycle {
+    # Registry is managed by postprovision hook; image is managed by azd deploy.
+    ignore_changes = [registry, template[0].container[0].image]
+  }
 }
 
 # ── Frontend Container App — external ingress ─────────────────────────────────
@@ -130,21 +123,15 @@ resource "azurerm_container_app" "frontend" {
   resource_group_name          = var.resource_group_name
   revision_mode                = "Single"
   workload_profile_name        = "Consumption"
-  tags                         = var.tags
+  tags                         = merge(var.tags, { "azd-service-name" = "frontend" })
 
-  registry {
-    server               = var.acr_login_server
-    username             = var.acr_username
-    password_secret_name = "acr-password"
+  identity {
+    type = "SystemAssigned"
   }
 
-  secret {
-    name  = "acr-password"
-    value = var.acr_password
-  }
+  # No registry block — configured by postprovision hook via CLI.
 
   ingress {
-    # Public — accessible from the internet
     external_enabled = true
     target_port      = 8501
     transport        = "http"
@@ -160,12 +147,10 @@ resource "azurerm_container_app" "frontend" {
 
     container {
       name   = "frontend"
-      image  = var.frontend_image
+      image  = local.placeholder_image
       cpu    = var.frontend_cpu
       memory = var.frontend_memory
 
-      # The frontend reaches the backend via the internal Container Apps URL.
-      # Format: https://{app-name}.internal.{environment-default-domain}
       env {
         name  = "BACKEND_URL"
         value = "https://${azurerm_container_app.backend.name}.internal.${azurerm_container_app_environment.main.default_domain}"
@@ -177,6 +162,26 @@ resource "azurerm_container_app" "frontend" {
     }
   }
 
-  # Ensure the backend is created first so the BACKEND_URL is valid
   depends_on = [azurerm_container_app.backend]
+
+  lifecycle {
+    ignore_changes = [registry, template[0].container[0].image]
+  }
+}
+
+# ── AcrPull role assignments ──────────────────────────────────────────────────
+# Created during provision. The postprovision hook runs AFTER these exist,
+# so `az containerapp registry set --identity system` always succeeds.
+resource "azurerm_role_assignment" "backend_acr_pull" {
+  scope                = var.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_container_app.backend.identity[0].principal_id
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azurerm_role_assignment" "frontend_acr_pull" {
+  scope                = var.acr_id
+  role_definition_name = "AcrPull"
+  principal_id         = azurerm_container_app.frontend.identity[0].principal_id
+  principal_type       = "ServicePrincipal"
 }

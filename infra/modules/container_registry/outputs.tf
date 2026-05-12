@@ -3,16 +3,9 @@ output "login_server" {
   value       = azurerm_container_registry.main.login_server
 }
 
-output "admin_username" {
-  description = "ACR admin username"
-  value       = azurerm_container_registry.main.admin_username
-  sensitive   = true
-}
-
-output "admin_password" {
-  description = "ACR admin password"
-  value       = azurerm_container_registry.main.admin_password
-  sensitive   = true
+output "acr_id" {
+  description = "ACR resource ID (for RBAC role assignments)"
+  value       = azurerm_container_registry.main.id
 }
 
 output "acr_name" {

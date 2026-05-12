@@ -34,9 +34,13 @@ class Settings(BaseSettings):
 
     # ── App ──────────────────────────────────────────────────────────────────
     max_audio_size_mb: int = 100
-    # How long (seconds) to wait for Speech Fast Transcription before giving up
-    speech_poll_timeout_seconds: int = 300
-    speech_poll_interval_seconds: int = 5
+    # Comma-separated list of allowed CORS origins.
+    cors_allowed_origins: str = "http://localhost:8501"
+    # How long (seconds) to poll the Batch Transcription job before giving up.
+    # Batch Transcription is asynchronous and can take several minutes for long
+    # audio files.  Default 1800 s (30 min) covers recordings up to ~2 hours.
+    speech_poll_timeout_seconds: int = 1800
+    speech_poll_interval_seconds: int = 10
 
     class Config:
         env_file = ".env"

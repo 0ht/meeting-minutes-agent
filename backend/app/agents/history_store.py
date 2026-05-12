@@ -22,9 +22,9 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from azure.core.exceptions import AzureError, ResourceExistsError, ResourceNotFoundError
-from azure.identity.aio import DefaultAzureCredential
 from azure.storage.blob.aio import BlobServiceClient
 
+from app.agents._credential import get_async_credential
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,8 @@ class HistoryEntry:
     input_filename: str
     input_blob: str          # e.g. "{job_id}/input.wav"
     has_result: bool
+    transcription_mode: str = ""   # "fast" | "batch" | ""
+    step_durations: dict | None = None  # {"step1": 12.3, ...}
 
 
 def _container() -> str:
@@ -53,12 +55,11 @@ def _enabled() -> bool:
     return bool(s.azure_storage_account_url and s.azure_history_container)
 
 
-async def _service() -> tuple[BlobServiceClient, DefaultAzureCredential]:
-    cred = DefaultAzureCredential()
-    svc = BlobServiceClient(
-        account_url=get_settings().azure_storage_account_url, credential=cred
+def _service() -> BlobServiceClient:
+    return BlobServiceClient(
+        account_url=get_settings().azure_storage_account_url,
+        credential=get_async_credential(),
     )
-    return svc, cred
 
 
 async def _ensure_container(svc: BlobServiceClient) -> None:
@@ -78,6 +79,8 @@ async def save_job(
     input_filename: str,
     input_bytes: bytes,
     title: str,
+    transcription_mode: str = "",
+    step_durations: dict[str, float] | None = None,
 ) -> Optional[HistoryEntry]:
     """Persist a completed job and its original input to Blob Storage."""
     if not _enabled():
@@ -96,14 +99,25 @@ async def save_job(
         "input_kind": input_kind,
         "input_filename": input_filename,
         "input_blob": input_blob_name,
+        "transcription_mode": transcription_mode,
+        "step_durations": step_durations,
         "result": job_payload,
     }
 
-    svc, cred = await _service()
     try:
-        async with svc:
+        async with _service() as svc:
             await _ensure_container(svc)
             container = svc.get_container_client(_container())
+
+            # Blob custom metadata for fast listing (avoids downloading job.json).
+            blob_metadata = {
+                "job_id": job_id,
+                "title": title[:256],  # Blob metadata values max ~8 KB total
+                "created_at": created_at,
+                "input_kind": input_kind,
+                "input_filename": input_filename[:256],
+                "transcription_mode": transcription_mode,
+            }
 
             # 1. Upload input.
             await container.upload_blob(
@@ -111,11 +125,12 @@ async def save_job(
                 data=input_bytes,
                 overwrite=True,
             )
-            # 2. Upload job.json.
+            # 2. Upload job.json with custom metadata.
             await container.upload_blob(
                 name=job_blob_name,
                 data=json.dumps(meta, ensure_ascii=False, default=str).encode("utf-8"),
                 overwrite=True,
+                metadata=blob_metadata,
             )
         logger.info("History saved for job %s (%s).", job_id, input_filename)
         return HistoryEntry(
@@ -130,8 +145,6 @@ async def save_job(
     except AzureError as exc:
         logger.exception("Failed to save history for %s: %s", job_id, exc)
         return None
-    finally:
-        await cred.close()
 
 
 async def list_entries(limit: int = 100) -> list[HistoryEntry]:
@@ -139,16 +152,37 @@ async def list_entries(limit: int = 100) -> list[HistoryEntry]:
     if not _enabled():
         return []
 
-    svc, cred = await _service()
     entries: list[HistoryEntry] = []
     try:
-        async with svc:
+        async with _service() as svc:
             container = svc.get_container_client(_container())
             try:
-                async for blob in container.list_blobs(name_starts_with=""):
+                async for blob in container.list_blobs(
+                    name_starts_with="", include=["metadata"],
+                ):
                     if not blob.name.endswith("/" + _JOB_BLOB):
                         continue
                     job_id = blob.name.split("/", 1)[0]
+                    md = blob.metadata or {}
+
+                    # Fast path: use blob metadata if present (new jobs).
+                    if md.get("job_id"):
+                        entries.append(
+                            HistoryEntry(
+                                job_id=md.get("job_id", job_id),
+                                title=md.get("title", "(無題)"),
+                                created_at=md.get("created_at", ""),
+                                input_kind=md.get("input_kind", "audio"),
+                                input_filename=md.get("input_filename", ""),
+                                input_blob=f"{job_id}/input.bin",
+                                has_result=True,
+                                transcription_mode=md.get("transcription_mode", ""),
+                                step_durations=None,
+                            )
+                        )
+                        continue
+
+                    # Fallback: download job.json for legacy entries.
                     try:
                         meta = await _load_job_meta(container, job_id)
                     except Exception as exc:  # noqa: BLE001
@@ -163,6 +197,8 @@ async def list_entries(limit: int = 100) -> list[HistoryEntry]:
                             input_filename=meta.get("input_filename", ""),
                             input_blob=meta.get("input_blob", ""),
                             has_result=bool(meta.get("result")),
+                            transcription_mode=meta.get("transcription_mode", ""),
+                            step_durations=meta.get("step_durations"),
                         )
                     )
             except ResourceNotFoundError:
@@ -170,8 +206,6 @@ async def list_entries(limit: int = 100) -> list[HistoryEntry]:
     except AzureError as exc:
         logger.warning("list_entries failed: %s", exc)
         return []
-    finally:
-        await cred.close()
 
     entries.sort(key=lambda e: e.created_at, reverse=True)
     return entries[:limit]
@@ -188,9 +222,8 @@ async def load_job(job_id: str) -> Optional[dict[str, Any]]:
     """Return the full archived job meta for *job_id* (or None)."""
     if not _enabled():
         return None
-    svc, cred = await _service()
     try:
-        async with svc:
+        async with _service() as svc:
             container = svc.get_container_client(_container())
             try:
                 return await _load_job_meta(container, job_id)
@@ -199,18 +232,15 @@ async def load_job(job_id: str) -> Optional[dict[str, Any]]:
     except AzureError as exc:
         logger.warning("load_job(%s) failed: %s", job_id, exc)
         return None
-    finally:
-        await cred.close()
 
 
 async def delete_job(job_id: str) -> bool:
     """Delete all blobs under ``{job_id}/``. Returns True if anything was deleted."""
     if not _enabled():
         return False
-    svc, cred = await _service()
     deleted = False
     try:
-        async with svc:
+        async with _service() as svc:
             container = svc.get_container_client(_container())
             try:
                 async for blob in container.list_blobs(name_starts_with=f"{job_id}/"):
@@ -224,8 +254,6 @@ async def delete_job(job_id: str) -> bool:
     except AzureError as exc:
         logger.warning("delete_job(%s) failed: %s", job_id, exc)
         return False
-    finally:
-        await cred.close()
     return deleted
 
 
@@ -239,9 +267,8 @@ async def load_input(job_id: str) -> Optional[tuple[bytes, str]]:
     if not input_blob:
         return None
 
-    svc, cred = await _service()
     try:
-        async with svc:
+        async with _service() as svc:
             container = svc.get_container_client(_container())
             blob = container.get_blob_client(input_blob)
             try:
@@ -253,5 +280,3 @@ async def load_input(job_id: str) -> Optional[tuple[bytes, str]]:
     except AzureError as exc:
         logger.warning("load_input(%s) failed: %s", job_id, exc)
         return None
-    finally:
-        await cred.close()

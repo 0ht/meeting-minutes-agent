@@ -79,9 +79,9 @@ variable "container_apps_subnet_cidr" {
 
 # ── Container Registry ────────────────────────────────────────────────────────
 variable "acr_sku" {
-  description = "SKU for Azure Container Registry"
+  description = "SKU for Azure Container Registry (Premium required for Private Endpoints)"
   type        = string
-  default     = "Basic"
+  default     = "Premium"
   validation {
     condition     = contains(["Basic", "Standard", "Premium"], var.acr_sku)
     error_message = "acr_sku must be Basic, Standard, or Premium"
@@ -112,36 +112,3 @@ variable "frontend_memory" {
   type        = string
   default     = "1Gi"
 }
-
-# ── Container images ──────────────────────────────────────────────────────────
-variable "backend_image_repo" {
-  description = "ACR repository name for the backend image (without registry/tag)"
-  type        = string
-  default     = "meeting-minutes-backend"
-}
-
-variable "backend_image_tag" {
-  description = "Tag for the backend container image"
-  type        = string
-  default     = "latest"
-}
-
-variable "frontend_image_repo" {
-  description = "ACR repository name for the frontend image (without registry/tag)"
-  type        = string
-  default     = "meeting-minutes-frontend"
-}
-
-variable "frontend_image_tag" {
-  description = "Tag for the frontend container image"
-  type        = string
-  default     = "latest"
-}
-
-# ── Tagging ───────────────────────────────────────────────────────────────────
-variable "tag_environment" {
-  description = "Value used for the 'environment' resource tag (independent of var.environment which controls resource naming)."
-  type        = string
-  default     = "dev"
-}
-

@@ -35,9 +35,9 @@ from pathlib import Path
 from typing import Any
 
 from azure.core.exceptions import AzureError
-from azure.identity.aio import DefaultAzureCredential
 from azure.storage.blob.aio import BlobServiceClient
 
+from app.agents._credential import get_async_credential
 from app.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -92,10 +92,10 @@ async def _load_from_blob() -> dict[str, Any] | None:
     if not (settings.azure_storage_account_url and settings.azure_terms_container):
         return None
 
-    credential = DefaultAzureCredential()
     try:
         async with BlobServiceClient(
-            account_url=settings.azure_storage_account_url, credential=credential
+            account_url=settings.azure_storage_account_url,
+            credential=get_async_credential(),
         ) as svc:
             blob = svc.get_blob_client(
                 container=settings.azure_terms_container,
@@ -107,8 +107,6 @@ async def _load_from_blob() -> dict[str, Any] | None:
     except AzureError as exc:
         logger.warning("Failed to load terminology from Blob (%s) — using local copy.", exc)
         return None
-    finally:
-        await credential.close()
 
 
 async def get_terminology() -> dict[str, Any]:

@@ -1,6 +1,6 @@
 # Meeting Minutes Agent — アーキテクチャ詳細
 
-> **最終更新日**: 2026-05-11
+> **最終更新日**: 2026-05-12
 
 ---
 
@@ -49,7 +49,7 @@
 - `azure-ai-agents` (1.1+) — AgentsClient
 - `azure-identity` — DefaultAzureCredential
 - `azure-storage-blob` — Blob Storage 接続
-- `httpx` — Speech Fast Transcription API 呼び出し
+- `httpx` — Speech Fast / Batch Transcription API 呼び出し
 - `pydub` — 音声ファイルの正規化（16 kHz/16-bit/mono WAV リサンプル、ffmpeg 必須）
 - `aiofiles` — 非同期ファイル I/O
 - `aiohttp` — 非同期 HTTP クライアント
@@ -58,7 +58,7 @@
 
 | モジュール | 役割 |
 |------------|------|
-| `speech_transcription.py` | Blob アップロード（アーカイブ）+ Azure Speech Fast Transcription で音声→テキスト変換 |
+| `speech_transcription.py` | Blob アップロード + Azure Speech Fast / Batch Transcription で音声→テキスト変換 |
 | `script_agent.py` | 生テキストを整形スクリプトに変換 |
 | `minutes_agent.py` | スクリプトから構造化議事録を生成 |
 | `terminology_agent.py` | 議事録に用語集を付与 |
@@ -76,11 +76,11 @@
 
 - **Frontend**: 外部イングレス（パブリック HTTPS）— ユーザーがブラウザからアクセス
 - **Backend**: 内部イングレスのみ — VNet 内からのみ到達可能（インターネット非公開）
-- **通信経路**: Frontend → Backend は `https://{backend-name}.internal.{env-domain}` で接続
-- **Foundry への通信**: Backend → Foundry (AIServices — Speech + GPT) は Managed Identity で認証
-- **Blob Storage への通信**: `network_rules { default_action = "Deny", bypass = ["AzureServices"] }` のため、VNet 内の Private Endpoint + Private DNS Zone 経由でアクセス
-- **Container Registry**: Premium SKU + `public_network_access_enabled = false` + Private Endpoint 経由でイメージプル
-- **Log Analytics**: Container Apps Environment からのログ送信は Azure バックボーン内で完結
+- **Frontend → Backend**: `https://{backend-name}.internal.{env-domain}` で VNet 内部通信
+- **Backend → AI Services (Foundry)**: `public_network_access_enabled = false` のため、Private Endpoint (`pe-cognitive-*`) + Private DNS Zone (`privatelink.cognitiveservices.azure.com` / `privatelink.openai.azure.com`) 経由。Speech Fast/Batch Transcription・GPT Chat Completions・Foundry Agents すべてこの経路を使用
+- **Backend → Blob Storage**: `network_rules { default_action = "Deny", bypass = ["AzureServices"] }` のため、Private Endpoint (`pe-blob-*`) + Private DNS Zone (`privatelink.blob.core.windows.net`) 経由
+- **Container Apps → ACR**: `public_network_access_enabled = false` のため、Private Endpoint (`pe-acr-*`) + Private DNS Zone (`privatelink.azurecr.io`) 経由でイメージプル
+- **Container Apps → Log Analytics**: Azure バックボーン内で完結（パブリックインターネット不経由）
 
 **サブネット構成**:
 
@@ -105,19 +105,33 @@ flowchart TB
         end
 
         subgraph SNET_PE["Subnet: snet-private-endpoints (10.0.2.0/24)"]
-            PE["Private Endpoint: pe-blob-*<br/>subresource = blob"]
+            PE_BLOB["PE: pe-blob-*<br/>subresource = blob"]
+            PE_COG["PE: pe-cognitive-*<br/>subresource = account"]
+            PE_ACR["PE: pe-acr-*<br/>subresource = registry"]
         end
 
-        PDNS["🔗 Private DNS Zone<br/>privatelink.blob.core.windows.net"]
+        PDNS_BLOB["🔗 privatelink.blob.core.windows.net"]
+        PDNS_COG["🔗 privatelink.cognitiveservices.azure.com"]
+        PDNS_OAI["🔗 privatelink.openai.azure.com"]
+        PDNS_ACR["🔗 privatelink.azurecr.io"]
     end
 
     ST["Storage Account (network_rules: Deny)"]
+    AIF["AI Services / Foundry (public_network_access: false)"]
+    ACR["ACR Premium (public_network_access: false)"]
 
-    Internet -->|public ingress :443| FE
-    FE -->|*.internal.<default-domain>| BE
-    BE --> PE
-    PE -.A record.-> PDNS
-    PE --> ST
+    Internet -->|"public ingress :443"| FE
+    FE -->|"*.internal.default-domain"| BE
+    BE --> PE_BLOB
+    BE --> PE_COG
+    CAE --> PE_ACR
+    PE_BLOB -."A record".-> PDNS_BLOB
+    PE_COG -."A record".-> PDNS_COG
+    PE_COG -."A record".-> PDNS_OAI
+    PE_ACR -."A record".-> PDNS_ACR
+    PE_BLOB --> ST
+    PE_COG --> AIF
+    PE_ACR --> ACR
 ```
 
 ---
@@ -134,7 +148,7 @@ graph LR
     B --> C["Step 3<br/>MinutesAgent<br/>議事録生成"]
     C --> D["Step 4<br/>TerminologyAgent<br/>用語補足"]
 
-    A -.-|"Speech API"| SA((Fast Transcription))
+    A -.-|"Speech API"| SA((Fast / Batch<br/>Transcription))
     B -.-|"Foundry Agent"| FA1((meeting-script-agent))
     C -.-|"Foundry Agent"| FA2((meeting-minutes-agent))
     D -.-|"Foundry Agent"| FA3((meeting-terminology-agent))
@@ -231,9 +245,38 @@ sequenceDiagram
 
 ### 5.2 クライアント初期化の優先順位
 
-1. `foundry_project_endpoint` が設定 → `AsyncOpenAI` (base_url = `{project}/openai/v1/`)
-2. `azure_openai_endpoint` が設定 → `AsyncAzureOpenAI` (レガシーフォールバック)
-3. 両方未設定 → モック動作
+Backend が Azure AI サービスに接続する際、環境変数の設定状況に応じて使用するクライアントが自動的に切り替わります。これは `backend/app/agents/foundry_client.py` で制御されており、開発環境からクラウド環境まで同じコードで動作させるための仕組みです。
+
+```
+判定フロー:
+
+  FOUNDRY_PROJECT_ENDPOINT が設定されている？
+    ├── Yes → ① Foundry 経由（推奨パス）
+    │         AsyncOpenAI(base_url="{project_endpoint}/openai/v1/")
+    │         認証スコープ: https://ai.azure.com/.default
+    │
+    └── No → AZURE_OPENAI_ENDPOINT が設定されている？
+               ├── Yes → ② Azure OpenAI 直接（レガシーフォールバック）
+               │         AsyncAzureOpenAI(azure_endpoint=...)
+               │         認証スコープ: https://cognitiveservices.azure.com/.default
+               │
+               └── No → ③ モック動作（ローカル開発用）
+                         AI サービスを呼ばず、ダミー結果を返す
+```
+
+**① Foundry 経由（推奨・本番構成）**
+
+`FOUNDRY_PROJECT_ENDPOINT`（例: `https://aif-mtgminutes-dev.services.ai.azure.com/api/projects/proj-mtgminutes-dev`）が設定されている場合に使用。標準の `AsyncOpenAI` クライアントを Foundry プロジェクトの base_url に接続します。この経路では Foundry の Prompt Agent（`agent_reference` パラメータ）が利用可能です。
+
+**② Azure OpenAI 直接（レガシー）**
+
+Foundry が未設定で `AZURE_OPENAI_ENDPOINT` のみ設定されている場合のフォールバック。`AsyncAzureOpenAI` で直接 Azure OpenAI リソースに接続します。Foundry Agent 機能（agent_reference）は使えません。
+
+**③ モック動作**
+
+両方とも未設定の場合、各エージェントはダミーの結果を返します。Azure リソースなしでもフロントエンド〜バックエンドの結合テストが可能です。ローカル開発時に `az login` すら不要です。
+
+> **Note**: Terraform でデプロイした環境では `FOUNDRY_PROJECT_ENDPOINT` が自動設定されるため、常に ① の Foundry 経由が使用されます。
 
 ### 5.3 ストレージ認証
 
@@ -246,21 +289,40 @@ Backend の System Managed Identity に対する割り当て:
 | ロール | スコープ | 用途 |
 |--------|---------|------|
 | `Storage Blob Data Contributor` | Storage Account | Blob 読み書き (audio, terms, history) |
-| `Cognitive Services User` | AI Services Account | Speech Fast Transcription |
+| `Cognitive Services User` | AI Services Account | Speech Fast / Batch Transcription |
 | `Azure AI User` | AI Services Account | Foundry Project / Agent 操作 |
 | `Cognitive Services OpenAI User` | AI Services Account | GPT モデル推論 |
+| `AcrPull` | Container Registry | コンテナイメージのプル |
+
+AI Services (Foundry) の System Managed Identity に対する割り当て:
+
+| ロール | スコープ | 用途 |
+|--------|---------|------|
+| `Storage Blob Data Reader` | Storage Account | Batch Transcription が Blob 上の音声ファイルを読み取り |
+
+Frontend の System Managed Identity に対する割り当て:
+
+| ロール | スコープ | 用途 |
+|--------|---------|------|
+| `AcrPull` | Container Registry | コンテナイメージのプル |
 
 ```mermaid
 flowchart LR
     BE_MI["🆔 Backend MI<br/>(SystemAssigned)"]
+    FE_MI["🆔 Frontend MI<br/>(SystemAssigned)"]
+    AIF_MI["🆔 AI Services MI<br/>(SystemAssigned)"]
 
     ST["💾 Storage Account"]
     AIF["🤖 AI Foundry Account"]
+    ACR["🐳 Container Registry"]
 
     BE_MI -->|Storage Blob Data Contributor| ST
     BE_MI -->|Azure AI User| AIF
     BE_MI -->|Cognitive Services User| AIF
     BE_MI -->|Cognitive Services OpenAI User| AIF
+    BE_MI -->|AcrPull| ACR
+    FE_MI -->|AcrPull| ACR
+    AIF_MI -->|Storage Blob Data Reader| ST
 ```
 
 ---
@@ -282,7 +344,7 @@ sequenceDiagram
     FE->>BE: POST /api/v1/audio/upload
     BE-->>FE: 202 Accepted {job_id}
     BE->>ST: audio-files/{job_id}/input.wav にアップロード
-    BE->>Speech: Fast Transcription API
+    BE->>Speech: Fast or Batch Transcription API (Blob URL)
     Speech-->>BE: ContentAnalysisResult
     BE->>Agent: Step 2〜4 (script → minutes → terminology)
     Agent-->>BE: 最終結果
@@ -341,8 +403,13 @@ infra/
 | Blob Containers | `audio-files` / `terms` / `history` | 用途別 3 コンテナ |
 | Virtual Network | `vnet-{app}-{env}` | 10.0.0.0/16 |
 | Private Endpoint | `pe-blob-{sa_name}` | Blob Storage への Private Link |
-| Private DNS Zone | `privatelink.blob.core.windows.net` | PE の名前解決 |
-| Container Registry | `acr{app}{env}` | コンテナイメージ管理 |
+| Private Endpoint | `pe-cognitive-aif-{app}-{env}` | AI Services (Foundry) への Private Link |
+| Private Endpoint | `pe-acr-{acr_name}` | Container Registry への Private Link |
+| Private DNS Zone | `privatelink.blob.core.windows.net` | Storage PE の名前解決 |
+| Private DNS Zone | `privatelink.cognitiveservices.azure.com` | AI Services PE の名前解決 |
+| Private DNS Zone | `privatelink.openai.azure.com` | OpenAI PE の名前解決 |
+| Private DNS Zone | `privatelink.azurecr.io` | ACR PE の名前解決 |
+| Container Registry | `acr{app}{env}` | Premium SKU、Private Endpoint 経由でイメージプル |
 | Log Analytics | `law-{app}-{env}` | ログ集約 |
 | Container Apps Env | `cae-{app}-{env}` | VNet 統合、Consumption |
 | Backend CA | `ca-backend-{app}-{env}` | 内部イングレス、1-5 レプリカ |

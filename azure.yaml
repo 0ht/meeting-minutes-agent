@@ -1,0 +1,45 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: meeting-minutes-agent
+
+infra:
+  provider: terraform
+  path: ./infra
+
+hooks:
+  postprovision:
+    posix:
+      shell: sh
+      run: ./hooks/postprovision.sh
+    windows:
+      shell: pwsh
+      run: ./hooks/postprovision.ps1
+  predeploy:
+    posix:
+      shell: sh
+      run: ./hooks/predeploy.sh
+    windows:
+      shell: pwsh
+      run: ./hooks/predeploy.ps1
+  postdeploy:
+    posix:
+      shell: sh
+      run: ./hooks/postdeploy.sh
+    windows:
+      shell: pwsh
+      run: ./hooks/postdeploy.ps1
+
+services:
+  backend:
+    host: containerapp
+    language: python
+    project: ./backend
+    docker:
+      path: ./Dockerfile
+      remoteBuild: true
+  frontend:
+    host: containerapp
+    language: python
+    project: ./frontend
+    docker:
+      path: ./Dockerfile
+      remoteBuild: true

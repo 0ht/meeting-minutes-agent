@@ -44,3 +44,8 @@ output "speech_id" {
   description = "Resource ID used for Speech RBAC — same as the Foundry account"
   value       = azurerm_cognitive_account.foundry.id
 }
+
+output "foundry_principal_id" {
+  description = "System-assigned Managed Identity principal ID of the Foundry account"
+  value       = azurerm_cognitive_account.foundry.identity[0].principal_id
+}

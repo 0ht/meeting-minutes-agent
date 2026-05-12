@@ -3,6 +3,32 @@ output "resource_group_name" {
   value       = azurerm_resource_group.main.name
 }
 
+# ── azd-compatible outputs ────────────────────────────────────────────────────
+# azd reads Terraform outputs and stores them as environment variables.
+# Well-known keys enable automatic service-to-resource mapping.
+
+output "AZURE_CONTAINER_REGISTRY_ENDPOINT" {
+  description = "ACR login server — used by azd to push container images"
+  value       = module.container_registry.login_server
+}
+
+output "AZURE_CONTAINER_REGISTRY_NAME" {
+  description = "ACR resource name — used by hooks to toggle public access"
+  value       = module.container_registry.acr_name
+}
+
+output "SERVICE_BACKEND_RESOURCE_NAME" {
+  description = "Container App name for the backend service (azd deploy target)"
+  value       = module.container_apps.backend_app_name
+}
+
+output "SERVICE_FRONTEND_RESOURCE_NAME" {
+  description = "Container App name for the frontend service (azd deploy target)"
+  value       = module.container_apps.frontend_app_name
+}
+
+# ── Application outputs ──────────────────────────────────────────────────────
+
 output "frontend_url" {
   description = "Public URL of the Streamlit frontend (Container App)"
   value       = module.container_apps.frontend_url

@@ -27,7 +27,7 @@ MAX_POLLS = max(1, MAX_WAIT_SECONDS // max(1, POLL_INTERVAL))
 # ── Page setup ────────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="会議議事録エージェント",
-    page_icon="🎙️",
+    page_icon="📝",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
@@ -36,84 +36,314 @@ st.set_page_config(
 st.markdown(
     """
 <style>
-/* Global font: 1 step smaller across the app */
-html { font-size: 14px; }
-.stApp, .stMarkdown, .stTextInput, .stTextArea, .stButton, .stTabs,
-.stSelectbox, .stExpander, .stCaption, .stMetric { font-size: 0.92rem; }
-h1 { font-size: 1.7rem !important; }
-h2 { font-size: 1.35rem !important; }
-h3 { font-size: 1.1rem !important; }
-h4 { font-size: 1.0rem !important; }
+/* ── Fluent Design 2 — color tokens ──────────────────────────────────── */
+:root {
+    --brand-primary: #0078d4;
+    --brand-hover:   #106ebe;
+    --brand-pressed: #005a9e;
+    --neutral-bg:    #faf9f8;
+    --neutral-border:#e1dfdd;
+    --neutral-fg:    #323130;
+    --neutral-fg2:   #605e5c;
+    --neutral-fg3:   #a19f9d;
+    --success:       #107c10;
+    --success-bg:    #dff6dd;
+    --error:         #a4262c;
+    --error-bg:      #fde7e9;
+    --surface:       #ffffff;
+}
 
-/* Header */
-.app-header {
+/* Global font — compact */
+html { font-size: 12px; }
+.stApp, .stMarkdown, .stTextInput, .stTextArea, .stButton, .stTabs,
+.stSelectbox, .stExpander, .stCaption, .stMetric { font-size: 0.85rem; }
+h1 { font-size: 1.5rem !important; margin: 0 !important; }
+h2 { font-size: 1.25rem !important; margin: 0 !important; }
+h3 { font-size: 1.1rem !important; margin: 0 !important; }
+h4 { font-size: 1.0rem !important; margin: 0 !important; }
+p { margin-bottom: 0.3rem !important; }
+
+/* ── Fluent buttons — all buttons get a consistent neutral style ──── */
+.stButton > button,
+.stDownloadButton > button {
+    background: var(--surface) !important;
+    color: var(--neutral-fg) !important;
+    border: 1px solid var(--neutral-border) !important;
+    border-radius: 4px !important;
+    padding: 5px 14px !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    transition: background 0.15s, border-color 0.15s !important;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.04) !important;
+}
+.stButton > button:hover,
+.stDownloadButton > button:hover {
+    background: #f3f2f1 !important;
+    border-color: #c8c6c4 !important;
+}
+.stButton > button:active,
+.stDownloadButton > button:active {
+    background: #edebe9 !important;
+}
+/* Primary buttons — brand blue (soft) */
+.stButton > button[kind="primary"],
+.stButton > button[data-testid="stBaseButton-primary"] {
+    background: var(--brand-primary) !important;
+    color: white !important;
+    border-color: var(--brand-primary) !important;
+}
+.stButton > button[kind="primary"]:hover,
+.stButton > button[data-testid="stBaseButton-primary"]:hover {
+    background: var(--brand-hover) !important;
+    border-color: var(--brand-hover) !important;
+}
+.stButton > button[kind="primary"]:active,
+.stButton > button[data-testid="stBaseButton-primary"]:active {
+    background: var(--brand-pressed) !important;
+}
+/* Disabled state */
+.stButton > button:disabled,
+.stDownloadButton > button:disabled {
+    background: #f3f2f1 !important;
+    color: var(--neutral-fg3) !important;
+    border-color: var(--neutral-border) !important;
+    box-shadow: none !important;
+    cursor: not-allowed !important;
+}
+
+/* Tighten Streamlit widget gaps */
+.stVerticalBlock > div { margin-bottom: 0 !important; padding-top: 0 !important; padding-bottom: 0 !important; }
+.stElementContainer { margin-bottom: 0.15rem !important; }
+.stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 2px solid var(--neutral-border); }
+.stTabs [data-baseweb="tab"] { padding: 4px 10px; font-size: 0.82rem; }
+.stTabs [data-baseweb="tab"][aria-selected="true"] { border-bottom: 2px solid var(--brand-primary); }
+div[data-testid="stExpander"] { margin-bottom: 4px !important; }
+div[data-testid="stExpander"] summary { padding: 4px 8px !important; font-size: 0.82rem; }
+.stDivider { margin: 4px 0 !important; }
+.stCaption { font-size: 0.78rem !important; }
+
+/* Compact header — single line */
+.app-header-compact {
+    display: flex;
+    align-items: center;
+    gap: 12px;
     background: linear-gradient(135deg, #0078d4 0%, #004578 100%);
     color: white;
-    padding: 20px 28px;
-    border-radius: 12px;
-    margin-bottom: 20px;
-    text-align: center;
+    padding: 6px 16px;
+    border-radius: 6px;
+    margin-bottom: 4px;
 }
-.app-header h1 { font-size: 1.7rem !important; margin: 0 0 6px; }
-.app-header p  { font-size: 0.9rem; opacity: 0.85; margin: 0; }
+.app-header-compact .header-title {
+    font-size: 1.15rem;
+    font-weight: 700;
+    white-space: nowrap;
+}
+.app-header-compact .header-status {
+    font-size: 0.82rem;
+    opacity: 0.9;
+    margin-left: auto;
+    white-space: nowrap;
+}
 
 /* Section headers */
 .section-label {
-    font-size: 0.92rem;
+    font-size: 0.95rem;
     font-weight: 600;
-    color: #005a9e;
-    margin-bottom: 4px;
+    color: var(--brand-pressed);
+    margin-bottom: 2px;
 }
 
 /* Pipeline step cards */
 .step-card {
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 10px 14px;
-    border-radius: 8px;
-    border: 1px solid #e1dfdd;
-    background: #f3f2f1;
-    margin-bottom: 8px;
-    font-size: 0.86rem;
+    gap: 8px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--neutral-border);
+    background: var(--neutral-bg);
+    margin-bottom: 4px;
+    font-size: 0.78rem;
 }
-.step-card.done    { border-color: #107c10; background: #dff6dd; }
-.step-card.active  { border-color: #0078d4; background: #c7e0f4; }
-.step-card.error   { border-color: #a4262c; background: #fde7e9; }
-.step-card.pending { border-color: #e1dfdd; background: #f3f2f1; color: #a19f9d; }
+.step-card.done    { border-color: var(--success); background: var(--success-bg); }
+.step-card.active  { border-color: var(--brand-primary); background: #deecf9; }
+.step-card.error   { border-color: var(--error); background: var(--error-bg); }
+.step-card.pending { border-color: var(--neutral-border); background: var(--neutral-bg); color: var(--neutral-fg3); }
 
 /* Result markdown tweaks */
 .minutes-box {
-    background: #ffffff;
-    border: 1px solid #e1dfdd;
-    border-radius: 8px;
-    padding: 18px 22px;
-}
-.stDownloadButton > button {
-    background: #0078d4 !important;
-    color: white !important;
+    background: var(--surface);
+    border: 1px solid var(--neutral-border);
+    border-radius: 6px;
+    padding: 10px 14px;
 }
 
-/* Hide Streamlit branding */
-#MainMenu, footer { visibility: hidden; }
+/* Hide Streamlit branding & top bar */
+#MainMenu, footer, header { visibility: hidden; height: 0; }
+
+/* Reduce top/bottom padding */
+.block-container { padding-top: 0.2rem !important; padding-bottom: 0.2rem !important; }
+.stMainBlockContainer { padding-top: 0.2rem !important; }
 
 /* Agent detail panel */
 .detail-panel {
-    border-left: 3px solid #0078d4;
-    padding-left: 12px;
+    border-left: 2px solid var(--brand-primary);
+    padding-left: 8px;
 }
-.detail-panel h4 { color: #0078d4; margin-bottom: 8px; }
+.detail-panel h4 { color: var(--brand-primary); margin-bottom: 4px; font-size: 1.0rem !important; }
 
-/* Topic summary line in 議事 section */
+/* Topic summary line */
 .topic-summary {
-    color: #424242;
-    margin: 4px 0 6px 0;
-    font-size: 0.92rem;
+    color: var(--neutral-fg);
+    margin: 2px 0 4px 0;
+    font-size: 0.82rem;
+}
+
+/* Status panel in input page */
+.status-panel {
+    background: var(--neutral-bg);
+    border: 1px solid var(--neutral-border);
+    border-radius: 6px;
+    padding: 8px;
+    margin-bottom: 4px;
+}
+.status-ready { color: var(--success); font-weight: 600; font-size: 0.84rem; }
+.status-waiting { color: var(--neutral-fg3); font-size: 0.84rem; }
+
+/* Delete confirm button — subtle danger */
+.del-confirm button {
+    background: var(--error) !important;
+    color: white !important;
+    border-color: var(--error) !important;
+}
+.del-confirm button:hover {
+    background: #c13530 !important;
 }
 </style>
 """,
     unsafe_allow_html=True,
 )
+
+# ── Responsive layout via JS injection ────────────────────────────────────────
+# Streamlit's st.container(height=N) only accepts px. CSS-in-markdown cannot
+# reliably override inline styles in all Streamlit versions. Instead, we
+# inject JS via an iframe that patches the parent document directly.
+import streamlit.components.v1
+
+streamlit.components.v1.html(
+    """
+    <script>
+    (function() {
+        var doc = window.parent.document;
+
+        // Inject style into parent <head> (idempotent)
+        if (!doc.getElementById('_vh_responsive')) {
+            var s = doc.createElement('style');
+            s.id = '_vh_responsive';
+            s.textContent = [
+                '/* Prevent page scroll */',
+                '.stApp { overflow: hidden !important; height: 100vh !important; }',
+                'section.stMain { overflow: hidden !important; }',
+                '.stMainBlockContainer { overflow: hidden !important; }',
+                '',
+                '/* All Streamlit fixed-height containers → responsive */',
+                'div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="height"] {',
+                '  height: 46vh !important;',
+                '  max-height: 46vh !important;',
+                '}',
+                '',
+                '/* Nested containers (agent detail) → smaller */',
+                'div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="height"]',
+                '  div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="height"] {',
+                '  height: 38vh !important;',
+                '  max-height: 38vh !important;',
+                '}',
+                '',
+                '/* Double-nested containers (JSON previews) — keep original height */',
+                'div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="height"]',
+                '  div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="height"]',
+                '    div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="height"] {',
+                '  /* Do not override — let the fixed px value from st.container() apply */',
+                '}',
+                'div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="height"]',
+                '  div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="height"]',
+                '    div[data-testid="stVerticalBlockBorderWrapper"] > div[style*="height"] {',
+                '  overflow: auto !important;',
+                '}',
+
+            ].join('\\n');
+            doc.head.appendChild(s);
+        }
+
+        // Belt-and-suspenders: also directly patch elements in case
+        // the CSS selector doesn't match the exact DOM structure.
+        function patchHeights() {
+            var vh = window.parent.innerHeight;
+            var mainH = Math.round(vh * 0.46);
+            var subH  = Math.round(vh * 0.12);
+
+            // Find all elements with inline height style
+            doc.querySelectorAll('*').forEach(function(el) {
+                var h = el.style.height;
+                if (!h || !h.match(/^\\d+(\\.\\d+)?px$/)) return;
+                var px = parseInt(h);
+                // Skip very small (buttons etc.) and very large (full page)
+                if (px < 60 || px > vh) return;
+                // Tag with data attribute for identification
+                if (px >= 200) {
+                    // Check if already inside a main container (nested)
+                    var parent = el.parentElement;
+                    var depth = 0;
+                    while (parent) {
+                        if (parent.dataset && parent.dataset.vhPatched) depth++;
+                        parent = parent.parentElement;
+                    }
+                    if (depth === 0) {
+                        el.style.setProperty('height', mainH + 'px', 'important');
+                        el.style.setProperty('max-height', mainH + 'px', 'important');
+                        el.dataset.vhPatched = 'main';
+                    } else if (depth === 1) {
+                        var detailH = Math.round(vh * 0.38);
+                        el.style.setProperty('height', detailH + 'px', 'important');
+                        el.style.setProperty('max-height', detailH + 'px', 'important');
+                        el.dataset.vhPatched = 'detail';
+                    }
+                    // depth >= 2: keep original px height (JSON preview sub-containers)
+                }
+            });
+        }
+
+        // Run on load, resize, and DOM mutations
+        setTimeout(patchHeights, 300);
+        setTimeout(patchHeights, 1000);
+        window.parent.addEventListener('resize', function() {
+            // Reset markers on resize so recalculation happens fresh
+            doc.querySelectorAll('[data-vh-patched]').forEach(function(el) {
+                delete el.dataset.vhPatched;
+            });
+            setTimeout(patchHeights, 100);
+        });
+
+        var observer = new MutationObserver(function() {
+            setTimeout(patchHeights, 200);
+        });
+        observer.observe(doc.body, { childList: true, subtree: true });
+    })();
+    </script>
+    """,
+    height=0,
+)
+
+# ── Responsive vh helper ──────────────────────────────────────────────────────
+# Streamlit's st.container(height=...) only accepts px. We set a rough
+# px fallback for the Python call, then CSS with !important overrides
+# inline styles to use viewport-relative `vh` units — fully responsive.
+
+_SCREEN_H_FALLBACK = 900  # px — fallback for Python-side container()
+
+def _vh(pct: int, screen_h: int = _SCREEN_H_FALLBACK) -> int:
+    """Return *pct* % of screen height as px (integer)."""
+    return max(80, int(screen_h * pct / 100))
 
 # ── Session state defaults ────────────────────────────────────────────────────
 # Keys here are managed manually (not bound to a widget). The toggle's
@@ -139,11 +369,12 @@ for k, v in _DEFAULTS.items():
 # ── API helpers ───────────────────────────────────────────────────────────────
 
 
-def api_submit(audio_bytes: bytes, filename: str, mime: str) -> str:
+def api_submit(audio_bytes: bytes, filename: str, mime: str, transcription_mode: str = "fast") -> str:
     """Upload audio to backend and return job_id."""
     resp = requests.post(
         f"{BACKEND_URL}/api/v1/audio/upload",
         files={"file": (filename, io.BytesIO(audio_bytes), mime)},
+        data={"transcription_mode": transcription_mode},
         timeout=300,
     )
     resp.raise_for_status()
@@ -288,34 +519,38 @@ def api_poll(job_id: str) -> dict:
 
 # ── Shared header ─────────────────────────────────────────────────────────────
 
-def render_header() -> None:
+def render_header(status: str = "") -> None:
+    """Compact single-line header with optional status on the right."""
+    status_html = (
+        f'<span class="header-status">{status}</span>' if status else ""
+    )
     st.markdown(
-        """
-<div class="app-header">
-  <h1>🎙️ 会議議事録エージェント</h1>
-  <p>音声ファイルから AI が自動で議事録を生成します</p>
-</div>
-""",
+        f'<div class="app-header-compact">'
+        f'<span class="header-title">会議議事録エージェント</span>'
+        f'{status_html}'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
 
 # ── Agent detail panel ─────────────────────────────────────────────────────────
 
-def render_agent_detail(result: dict, input_mode: str = "audio") -> None:
+def render_agent_detail(result: dict, input_mode: str = "audio", height: int | None = None) -> None:
     """Render agent input/output detail panel in the right column."""
+    if height is None:
+        height = _vh(40)
     cu = result.get("content_analysis")
     script = result.get("script")
     minutes = result.get("minutes")
     final = result.get("final_minutes")
 
     st.markdown('<div class="detail-panel">', unsafe_allow_html=True)
-    st.markdown("#### \U0001f50d エージェント入出力")
+    st.markdown("#### エージェント入出力")
 
     # Make the panel itself independently scrollable so it doesn't push the
     # main column down. ``st.container(height=...)`` clips overflow and shows
     # a vertical scrollbar local to this panel only.
-    with st.container(height=720, border=False):
+    with st.container(height=height, border=False):
         # Step 1: Speech Transcription — only shown when audio was provided.
         if input_mode != "transcript":
             with st.expander(
@@ -324,12 +559,12 @@ def render_agent_detail(result: dict, input_mode: str = "audio") -> None:
             ):
                 st.markdown("**入力**")
                 st.caption("音声ファイル（バイナリデータ）")
-                st.divider()
                 st.markdown("**出力**")
                 if cu:
-                    st.json(cu)
+                    with st.container(height=160):
+                        st.json(cu)
                 else:
-                    st.info("⏳ 処理待ち")
+                    st.info("処理待ち")
 
         # Step 2: Script generation
         with st.expander(
@@ -341,16 +576,16 @@ def render_agent_detail(result: dict, input_mode: str = "audio") -> None:
             else:
                 st.markdown("**入力** — 音声解析結果")
             if cu:
-                with st.container(height=200):
+                with st.container(height=160):
                     st.json(cu)
             else:
-                st.info("⏳ 入力待ち" if input_mode == "transcript" else "⏳ Step 1 の完了待ち")
-            st.divider()
+                st.info("入力待ち" if input_mode == "transcript" else "Step 1 の完了待ち")
             st.markdown("**出力**")
             if script:
-                st.json(script)
+                with st.container(height=160):
+                    st.json(script)
             else:
-                st.info("⏳ 処理待ち")
+                st.info("処理待ち")
 
         # Step 3: Minutes creation
         with st.expander(
@@ -359,31 +594,31 @@ def render_agent_detail(result: dict, input_mode: str = "audio") -> None:
         ):
             st.markdown("**入力** — スクリプト")
             if script:
-                with st.container(height=200):
+                with st.container(height=160):
                     st.json(script)
             else:
-                st.info("⏳ Step 2 の完了待ち")
-            st.divider()
+                st.info("Step 2 の完了待ち")
             st.markdown("**出力**")
             if minutes:
-                st.json(minutes)
+                with st.container(height=160):
+                    st.json(minutes)
             else:
-                st.info("⏳ 処理待ち")
+                st.info("処理待ち")
 
         # Step 4: Terminology enrichment
         with st.expander("Step 4: 用語補足", expanded=final is not None):
             st.markdown("**入力** — 議事録")
             if minutes:
-                with st.container(height=200):
+                with st.container(height=160):
                     st.json(minutes)
             else:
-                st.info("⏳ Step 3 の完了待ち")
-            st.divider()
+                st.info("Step 3 の完了待ち")
             st.markdown("**出力**")
             if final:
-                st.json(final)
+                with st.container(height=160):
+                    st.json(final)
             else:
-                st.info("⏳ 処理待ち")
+                st.info("処理待ち")
 
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -393,146 +628,167 @@ def render_agent_detail(result: dict, input_mode: str = "audio") -> None:
 def page_input() -> None:
     render_header()
 
-    st.subheader("入力")
-    tab_record, tab_upload, tab_text = st.tabs(
-        ["🎤 録音", "📁 ファイルアップロード", "📝 文字起こしテキスト"]
-    )
-
     audio_bytes: Optional[bytes] = None
     filename: Optional[str] = None
     mime: Optional[str] = None
     transcript_text: Optional[str] = None
 
-    # ── Recording tab ─────────────────────────────────────────────────────────
-    with tab_record:
-        st.markdown(
-            "ブラウザのマイクを使って録音します。**録音ボタン** を押して話しかけてください。"
-        )
-        try:
-            recorded = st.audio_input("🎤 クリックして録音を開始")
-            if recorded is not None:
-                audio_bytes = recorded.read()
-                filename = "recording.wav"
-                mime = recorded.type or "audio/wav"
-                st.audio(audio_bytes, format=mime)
-                st.success(
-                    f"録音完了：{len(audio_bytes)/1024:.1f} KB"
-                    " — 下の「議事録を生成」ボタンを押してください。"
-                )
-        except AttributeError:
-            st.warning(
-                "この Streamlit バージョンは `audio_input` に対応していません。"
-                "「ファイルアップロード」タブをお使いください。"
+    col_op, col_status = st.columns(2)
+
+    # ── Left: Input operations ────────────────────────────────────────────────
+    with col_op:
+        with st.container(height=_vh(46), border=False):
+            st.markdown('<p class="section-label">入力</p>', unsafe_allow_html=True)
+            tab_record, tab_upload, tab_text = st.tabs(
+                ["録音", "アップロード", "テキスト"]
             )
 
-    # ── Upload tab ────────────────────────────────────────────────────────────
-    with tab_upload:
-        st.markdown(
-            "録音済みの音声ファイルをアップロードしてください。"
-            "対応形式: **WAV, MP3, MP4, M4A, OGG, WebM, FLAC**（最大 100 MB）"
-        )
-        uploaded = st.file_uploader(
-            "ファイルを選択またはドロップ",
-            type=["wav", "mp3", "mp4", "m4a", "ogg", "webm", "flac"],
-            accept_multiple_files=False,
-        )
-        if uploaded is not None:
-            audio_bytes = uploaded.read()
-            filename = uploaded.name
-            mime = uploaded.type or "audio/wav"
-            st.audio(audio_bytes, format=mime)
-            st.info(f"選択中: **{filename}**（{len(audio_bytes)/1024:.1f} KB）")
+            with tab_record:
+                st.caption("ブラウザのマイクで録音します")
+                try:
+                    recorded = st.audio_input("クリックして録音を開始")
+                    if recorded is not None:
+                        audio_bytes = recorded.read()
+                        filename = "recording.wav"
+                        mime = recorded.type or "audio/wav"
+                        st.audio(audio_bytes, format=mime)
+                        st.success(f"録音完了：{len(audio_bytes)/1024:.1f} KB")
+                except AttributeError:
+                    st.warning("このバージョンは audio_input 非対応です。アップロードタブをお使いください。")
 
-    # ── Transcript text tab ────────────────────────────────────────────
-    with tab_text:
-        st.markdown(
-            "すでに文字起こし済みのテキストがある場合は、こちらに貼り付けてください。"
-            "話者を区別する場合は `話者：発言内容` の形式を推奨します。"
-        )
-        text_input = st.text_area(
-            "文字起こしテキスト",
-            height=300,
-            placeholder="話者１：本日はお集まりいただきまして...",
-        )
-        uploaded_text = st.file_uploader(
-            "またはテキストファイルをアップロード (.txt / .md / .vtt / .srt / .docx)",
-            type=["txt", "md", "vtt", "srt", "docx"],
-            accept_multiple_files=False,
-            key="transcript_file",
-        )
-        if uploaded_text is not None:
-            ext = uploaded_text.name.rsplit(".", 1)[-1].lower() if "." in uploaded_text.name else ""
-            try:
-                raw_bytes = uploaded_text.read()
-                if ext == "docx":
-                    text_input = parse_docx(raw_bytes)
-                else:
-                    decoded = raw_bytes.decode("utf-8", errors="replace")
-                    if ext in ("vtt", "srt"):
-                        text_input = parse_vtt(decoded)
-                    else:
-                        text_input = decoded
-                st.success(
-                    f"ファイルを読み込みました: **{uploaded_text.name}**（{len(text_input)} 文字）"
+            with tab_upload:
+                st.caption("WAV, MP3, MP4, M4A, OGG, WebM, FLAC（最大 100 MB）")
+                uploaded = st.file_uploader(
+                    "ファイルを選択またはドロップ",
+                    type=["wav", "mp3", "mp4", "m4a", "ogg", "webm", "flac"],
+                    accept_multiple_files=False,
                 )
-                with st.expander("プレビュー"):
-                    st.text(text_input[:1000] + ("..." if len(text_input) > 1000 else ""))
-            except Exception as exc:  # noqa: BLE001
-                st.error(f"ファイルの読み込みに失敗しました: {exc}")
-        if text_input and text_input.strip():
-            transcript_text = text_input.strip()
-            st.caption(f"文字数: {len(transcript_text)}")
+                if uploaded is not None:
+                    audio_bytes = uploaded.read()
+                    filename = uploaded.name
+                    mime = uploaded.type or "audio/wav"
+                    st.audio(audio_bytes, format=mime)
+                    st.info(f"**{filename}**（{len(audio_bytes)/1024:.1f} KB）")
 
-    # ── Submit ────────────────────────────────────────────────────────────────
-    st.divider()
+            with tab_text:
+                st.caption("文字起こし済みテキストを貼り付け。話者：発言内容 の形式推奨")
+                text_input = st.text_area(
+                    "文字起こしテキスト",
+                    height=100,
+                    placeholder="話者１：本日はお集まりいただきまして...",
+                )
+                uploaded_text = st.file_uploader(
+                    "テキストファイル (.txt/.md/.vtt/.srt/.docx)",
+                    type=["txt", "md", "vtt", "srt", "docx"],
+                    accept_multiple_files=False,
+                    key="transcript_file",
+                )
+                if uploaded_text is not None:
+                    ext = uploaded_text.name.rsplit(".", 1)[-1].lower() if "." in uploaded_text.name else ""
+                    try:
+                        raw_bytes = uploaded_text.read()
+                        if ext == "docx":
+                            text_input = parse_docx(raw_bytes)
+                        else:
+                            decoded = raw_bytes.decode("utf-8", errors="replace")
+                            if ext in ("vtt", "srt"):
+                                text_input = parse_vtt(decoded)
+                            else:
+                                text_input = decoded
+                        st.success(f"**{uploaded_text.name}**（{len(text_input)} 文字）")
+                    except Exception as exc:  # noqa: BLE001
+                        st.error(f"読み込み失敗: {exc}")
+                if text_input and text_input.strip():
+                    transcript_text = text_input.strip()
+
     has_input = (audio_bytes is not None) or (transcript_text is not None)
-    col_left, col_btn, col_right = st.columns([3, 2, 3])
-    with col_btn:
-        if st.button(
-            "✨ 議事録を生成",
-            use_container_width=True,
-            disabled=not has_input,
-            type="primary",
-        ):
-            if transcript_text is not None:
-                st.session_state.input_mode = "transcript"
-                st.session_state.transcript_text = transcript_text
-                st.session_state.audio_bytes = None
-                st.session_state.audio_filename = None
-                st.session_state.audio_mime = None
-            else:
-                st.session_state.input_mode = "audio"
-                st.session_state.transcript_text = None
-                st.session_state.audio_bytes = audio_bytes
-                st.session_state.audio_filename = filename
-                st.session_state.audio_mime = mime
-            st.session_state.page = "processing"
-            st.rerun()
 
+    # ── Right: Status & submit ────────────────────────────────────────────────
+    with col_status:
+        with st.container(height=_vh(46), border=False):
+            st.markdown('<p class="section-label">入力状況</p>', unsafe_allow_html=True)
+
+            if audio_bytes is not None:
+                st.markdown(
+                    '<div class="status-panel">'
+                    '<p class="status-ready">音声ファイル準備完了</p></div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"ファイル: {filename}　サイズ: {len(audio_bytes)/1024:.1f} KB")
+                use_batch = st.toggle(
+                    "Batch Transcription",
+                    value=False,
+                    help="OFF: Fast（同期・高速）/ ON: Batch（非同期・大量処理向け）",
+                )
+                transcription_mode = "batch" if use_batch else "fast"
+            elif transcript_text is not None:
+                st.markdown(
+                    '<div class="status-panel">'
+                    '<p class="status-ready">テキスト準備完了</p></div>',
+                    unsafe_allow_html=True,
+                )
+                st.caption(f"文字数: {len(transcript_text)}")
+                transcription_mode = "fast"
+            else:
+                st.markdown(
+                    '<div class="status-panel">'
+                    '<p class="status-waiting">左のパネルで入力を選択してください</p></div>',
+                    unsafe_allow_html=True,
+                )
+                transcription_mode = "fast"
+
+            st.divider()
+            if st.button(
+                "議事録を生成",
+                use_container_width=True,
+                disabled=not has_input,
+                type="primary",
+            ):
+                if transcript_text is not None:
+                    st.session_state.input_mode = "transcript"
+                    st.session_state.transcript_text = transcript_text
+                    st.session_state.audio_bytes = None
+                    st.session_state.audio_filename = None
+                    st.session_state.audio_mime = None
+                else:
+                    st.session_state.input_mode = "audio"
+                    st.session_state.transcript_text = None
+                    st.session_state.audio_bytes = audio_bytes
+                    st.session_state.audio_filename = filename
+                    st.session_state.audio_mime = mime
+                    st.session_state.transcription_mode = transcription_mode
+                st.session_state.page = "processing"
+                st.rerun()
+
+    # ── History (lower half) ──────────────────────────────────────────────────
     _render_history_section()
 
 
 def _render_history_section() -> None:
-    """Render the saved-history section with browse / download / open actions."""
-    st.divider()
-    with st.expander("📚 過去の議事録（履歴）", expanded=False):
-        col_a, col_b = st.columns([1, 6])
-        with col_a:
-            if st.button("🔄 再読み込み", key="reload_history"):
-                # Drop all cached entries + per-job md/input caches
-                for k in list(st.session_state.keys()):
-                    if k == "_history_items" or k.startswith("_md_") or k.startswith("_in_"):
-                        st.session_state.pop(k, None)
-                st.rerun()
-        items = st.session_state.get("_history_items")
-        if items is None:
-            items = api_list_history()
-            st.session_state["_history_items"] = items
+    """Render the saved-history section — always visible in the lower half."""
+    st.markdown("---")
+    col_title, col_reload = st.columns([5, 2])
+    with col_title:
+        st.markdown('<p class="section-label">過去の議事録</p>', unsafe_allow_html=True)
+    with col_reload:
+        if st.button("🔄 履歴リスト更新", key="reload_history", use_container_width=True):
+            for k in list(st.session_state.keys()):
+                if k == "_history_items" or k.startswith("_md_") or k.startswith("_in_"):
+                    st.session_state.pop(k, None)
+            st.rerun()
 
-        if not items:
-            st.info("まだ履歴はありません。議事録を生成すると自動で保存されます。")
-            return
+    items = st.session_state.get("_history_items")
+    if items is None:
+        items = api_list_history()
+        st.session_state["_history_items"] = items
 
+    if not items:
+        st.info("まだ履歴はありません。議事録を生成すると自動で保存されます。")
+        return
+
+    _STEP_LABELS = {"step1": "音声解析", "step2": "スクリプト", "step3": "議事録", "step4": "用語補足"}
+
+    with st.container(height=_vh(46), border=False):
         for it in items:
             jid = it.get("job_id", "")
             title = it.get("title") or "(無題)"
@@ -547,15 +803,35 @@ def _render_history_section() -> None:
                 created_disp = created
             kind = it.get("input_kind", "")
             input_filename = it.get("input_filename", "")
-            kind_label = "🎤 音声" if kind == "audio" else "📝 文字起こし"
+            kind_label = "音声" if kind == "audio" else "テキスト"
+            tmode = it.get("transcription_mode", "")
+            tmode_label = ""
+            if tmode == "batch":
+                tmode_label = " ・ Batch"
+            elif tmode == "fast":
+                tmode_label = " ・ Fast"
+
+            step_durs = it.get("step_durations") or {}
+            total_dur = sum(step_durs.values()) if step_durs else None
+            dur_total = f"合計 {total_dur:.0f}s" if total_dur is not None else ""
+            # Build per-step breakdown string
+            dur_parts = []
+            for sk, sl in _STEP_LABELS.items():
+                v = step_durs.get(sk)
+                if v is not None:
+                    dur_parts.append(f"{sl} {v:.1f}s")
+            dur_breakdown = f"（{'／'.join(dur_parts)}）" if dur_parts else ""
 
             with st.container(border=True):
                 st.markdown(
                     f"**{title}**  \n"
-                    f"<span style='color:#605e5c;font-size:0.85rem;'>{created_disp} ・ "
-                    f"{kind_label}（{input_filename}）・ <code>{jid[:8]}</code></span>",
+                    f"<span style='color:#605e5c;font-size:0.82rem;'>"
+                    f"{created_disp} ・ {kind_label}（{input_filename}）{tmode_label}"
+                    f" ・ <code>{jid[:8]}</code></span>",
                     unsafe_allow_html=True,
                 )
+                if dur_total:
+                    st.caption(f"{dur_total} {dur_breakdown}")
 
                 # Pre-fetch markdown + input lazily, cached per session.
                 md_key = f"_md_{jid}"
@@ -573,7 +849,7 @@ def _render_history_section() -> None:
 
                 c1, c2, c3, c4 = st.columns([1, 2, 2, 1])
                 with c1:
-                    if st.button("📂 開く", key=f"open_{jid}", use_container_width=True):
+                    if st.button("開く", key=f"open_{jid}", use_container_width=True):
                         meta = api_get_history(jid)
                         if meta:
                             result = meta.get("result", {})
@@ -586,7 +862,7 @@ def _render_history_section() -> None:
                             st.rerun()
                 with c2:
                     st.download_button(
-                        "⬇️ 議事録をMarkdown形式でダウンロード",
+                        "議事録MD",
                         data=md_data.encode("utf-8") if md_data else b"",
                         file_name=f"minutes_{jid[:8]}.md",
                         mime="text/markdown",
@@ -598,7 +874,7 @@ def _render_history_section() -> None:
                     if in_payload:
                         data, fname, mime_ = in_payload
                         st.download_button(
-                            "📥 入力ファイルをダウンロード",
+                            "入力ファイル",
                             data=data,
                             file_name=fname,
                             mime=mime_,
@@ -607,7 +883,7 @@ def _render_history_section() -> None:
                         )
                     else:
                         st.button(
-                            "📥 入力ファイルをダウンロード",
+                            "入力ファイル",
                             key=f"dl_in_disabled_{jid}",
                             use_container_width=True,
                             disabled=True,
@@ -616,7 +892,7 @@ def _render_history_section() -> None:
                     confirm_key = f"_del_confirm_{jid}"
                     if st.session_state.get(confirm_key):
                         if st.button(
-                            "❗ 本当に削除",
+                            "本当に削除",
                             key=f"del_yes_{jid}",
                             use_container_width=True,
                             type="primary",
@@ -628,7 +904,7 @@ def _render_history_section() -> None:
                                 st.rerun()
                     else:
                         if st.button(
-                            "🗑️ 削除",
+                            "削除",
                             key=f"del_{jid}",
                             use_container_width=True,
                         ):
@@ -637,43 +913,35 @@ def _render_history_section() -> None:
 
 
 def page_processing() -> None:
-    render_header()
-    st.subheader("処理状況")
-
-    show_detail = st.toggle("🔍 エージェント詳細パネル", key="show_agent_detail")
+    render_header(status="処理中...")
 
     _ALL_STEPS = [
-        ("cu",      "🔍", "音声解析（Speech Transcription）",
-         "音声を文字起こしし、構造化データを抽出します"),
-        ("script",  "📝", "スクリプト生成エージェント",
-         "文字起こし結果を整理して読みやすいスクリプトにします"),
-        ("minutes", "📋", "議事録作成エージェント",
-         "スクリプトをもとに正式な議事録を作成します"),
-        ("term",    "📚", "用語補足エージェント",
-         "業界・社内用語を参照して議事録を補足します"),
+        ("cu",      "", "音声解析（Speech Transcription）",
+         "音声を文字起こしし構造化データを抽出"),
+        ("script",  "", "スクリプト生成エージェント",
+         "文字起こし結果を整理しスクリプト化"),
+        ("minutes", "", "議事録作成エージェント",
+         "スクリプトから正式な議事録を作成"),
+        ("term",    "", "用語補足エージェント",
+         "業界・社内用語を参照し議事録を補足"),
     ]
-    # Skip the audio-analysis step when the user submitted a pre-existing transcript.
     input_mode = st.session_state.get("input_mode", "audio")
     if input_mode == "transcript":
         _STEPS = [s for s in _ALL_STEPS if s[0] != "cu"]
     else:
         _STEPS = _ALL_STEPS
 
-    if show_detail:
-        col_main, col_detail = st.columns([3, 2])
-    else:
-        col_main = st.container()
-        col_detail = None
+    col_left, col_right = st.columns(2)
 
-    # Create placeholders for each step (inside main column)
-    with col_main:
+    # ── Left: step cards ──────────────────────────────────────────────────────
+    with col_left:
+        st.markdown('<p class="section-label">処理ステップ</p>', unsafe_allow_html=True)
         step_phs: dict[str, st.empty] = {}
         for key, icon, title, desc in _STEPS:
             ph = st.empty()
             step_phs[key] = ph
             ph.markdown(
                 f'<div class="step-card pending">'
-                f'<span style="font-size:1.4rem">{icon}</span>'
                 f'<div><strong>{title}</strong><br>'
                 f'<span style="font-size:.83rem;color:#a19f9d">{desc}</span></div>'
                 f'<span style="margin-left:auto;font-size:.83rem;color:#a19f9d">待機中</span>'
@@ -686,11 +954,10 @@ def page_processing() -> None:
         else:
             msg_ph.info("音声ファイルを送信中...")
 
-    # Detail panel placeholder
-    detail_ph = None
-    if col_detail is not None:
-        with col_detail:
-            detail_ph = st.empty()
+    # ── Right: agent detail (always visible) ──────────────────────────────────
+    with col_right:
+        st.markdown('<p class="section-label">エージェント詳細</p>', unsafe_allow_html=True)
+        detail_ph = st.empty()
 
     def render_step(key: str, icon: str, title: str, desc: str,
                     state: str, status_text: str, error_detail: str = "") -> None:
@@ -698,8 +965,8 @@ def page_processing() -> None:
         if state == "error":
             css = "error"
         icon_prefix = {
-            "done": "✅", "active": "🔄", "error": "❌", "skipped": "⏭️",
-        }.get(state, "⬜")
+            "done": "✔", "active": "▶", "error": "✖", "skipped": "–",
+        }.get(state, "–")
         color = {"pending": "#a19f9d", "skipped": "#a19f9d"}.get(state, "inherit")
         detail_html = ""
         if error_detail:
@@ -709,7 +976,6 @@ def page_processing() -> None:
             )
         step_phs[key].markdown(
             f'<div class="step-card {css}">'
-            f'<span style="font-size:1.4rem">{icon}</span>'
             f'<div><strong>{title}</strong><br>'
             f'<span style="font-size:.83rem">{desc}</span>{detail_html}</div>'
             f'<span style="margin-left:auto;font-size:.83rem;color:{color};white-space:nowrap">'
@@ -729,6 +995,7 @@ def page_processing() -> None:
                     st.session_state.audio_bytes,
                     st.session_state.audio_filename or "audio.wav",
                     st.session_state.audio_mime or "audio/wav",
+                    transcription_mode=st.session_state.get("transcription_mode", "fast"),
                 )
             st.session_state.job_id = job_id
         except Exception as exc:  # noqa: BLE001
@@ -753,7 +1020,6 @@ def page_processing() -> None:
                 st.session_state.page = "error"
                 st.rerun()
                 return
-            # Transient error: wait and retry without aborting the job.
             msg_ph.warning(
                 f"⚠️ ステータス取得に失敗 ({consecutive_errors}/{MAX_CONSEC_ERRORS}回目) — 再試行します..."
             )
@@ -766,10 +1032,10 @@ def page_processing() -> None:
         has_final  = result.get("final_minutes") is not None
         is_error   = result["status"] == "error"
         message    = result.get("message", "処理中...")
+        step_durations = result.get("step_durations") or {}
 
-        # Determine which step failed (if any) based on partial results.
-        # The step that was running when the error occurred is the first
-        # incomplete step in the pipeline.
+        _DURATION_MAP = {"cu": "step1", "script": "step2", "minutes": "step3", "term": "step4"}
+
         failed_step: str | None = None
         if is_error:
             if input_mode == "transcript":
@@ -789,10 +1055,8 @@ def page_processing() -> None:
                 elif not has_final:
                     failed_step = "term"
 
-        # Extract a short error reason from the backend message.
         error_reason = ""
         if is_error and message:
-            # Backend format: "エラーが発生しました: <detail>"
             if ":" in message:
                 error_reason = message.split(":", 1)[1].strip()
             else:
@@ -812,12 +1076,14 @@ def page_processing() -> None:
                 done, active = has_final, has_min and not has_final and not is_error
 
             if done:
-                state, status_text, detail = "done", "完了", ""
+                dur_key = _DURATION_MAP.get(key, "")
+                dur_val = step_durations.get(dur_key)
+                dur_text = f" ({dur_val:.1f}s)" if dur_val is not None else ""
+                state, status_text, detail = "done", f"完了{dur_text}", ""
             elif is_error and key == failed_step:
                 state, status_text = "error", "エラー"
                 detail = error_reason
             elif is_error:
-                # Steps that were never reached (after the failed step).
                 state, status_text, detail = "skipped", "未到達", ""
             elif active:
                 state, status_text, detail = "active", "処理中...", ""
@@ -826,13 +1092,12 @@ def page_processing() -> None:
 
             render_step(key, icon, title, desc, state, status_text, detail)
 
-        # Update detail panel if visible
-        if detail_ph is not None:
-            with detail_ph.container():
-                render_agent_detail(result, input_mode=input_mode)
+        # Update detail panel (always visible)
+        with detail_ph.container():
+            render_agent_detail(result, input_mode=input_mode)
 
         if result["status"] == "done":
-            msg_ph.success("✨ 議事録が生成されました！")
+            msg_ph.success("議事録が生成されました！")
             st.session_state.job_result = result
             st.session_state.page = "result"
             time.sleep(0.8)
@@ -840,20 +1105,15 @@ def page_processing() -> None:
             return
 
         if is_error:
-            msg_ph.error(f"❌ {message}")
-            # Stay on this page so the user can see which step failed.
-            # Show a button to go back to input.
-            with col_main:
-                st.divider()
-                col_e1, col_e2, col_e3 = st.columns([3, 2, 3])
-                with col_e2:
-                    if st.button("🔄 やり直す", use_container_width=True, type="primary"):
-                        for k, v in _DEFAULTS.items():
-                            st.session_state[k] = v
-                        st.rerun()
+            msg_ph.error(f"{message}")
+            with col_left:
+                if st.button("やり直す", use_container_width=True, type="primary"):
+                    for k, v in _DEFAULTS.items():
+                        st.session_state[k] = v
+                    st.rerun()
             return
 
-        msg_ph.info(f"⏳ {message}")
+        msg_ph.info(f"{message}")
         time.sleep(POLL_INTERVAL)
 
     st.session_state.error_msg = "タイムアウト: 処理が完了しませんでした。"
@@ -862,7 +1122,7 @@ def page_processing() -> None:
 
 
 def page_result() -> None:
-    render_header()
+    render_header(status="完了")
 
     result = st.session_state.job_result or {}
     final  = result.get("final_minutes") or {}
@@ -873,100 +1133,99 @@ def page_result() -> None:
     markdown_text = final.get("markdown") or mins.get("raw_markdown", "")
     glossary      = final.get("glossary", [])
 
-    show_detail = st.toggle("🔍 エージェント詳細パネル", key="show_agent_detail")
+    col_left, col_right = st.columns(2)
 
-    if show_detail:
-        col_main, col_detail = st.columns([3, 2])
-    else:
-        col_main = st.container()
-        col_detail = None
+    # ── Left: results ─────────────────────────────────────────────────────────
+    with col_left:
+        with st.container(height=_vh(46), border=False):
+            col1, col2 = st.columns(2)
+            with col1:
+                st.download_button(
+                    "Markdown",
+                    data=markdown_text,
+                    file_name=f"minutes_{_today()}.md",
+                    mime="text/markdown",
+                    use_container_width=True,
+                )
+            with col2:
+                if st.button("新しい議事録", use_container_width=True):
+                    for k, v in _DEFAULTS.items():
+                        st.session_state[k] = v
+                    st.rerun()
 
-    with col_main:
-        # ── Action buttons ────────────────────────────────────────────────────
-        col1, col2, col3 = st.columns([2, 2, 6])
-        with col1:
-            st.download_button(
-                "⬇️ Markdown ダウンロード",
-                data=markdown_text,
-                file_name=f"minutes_{_today()}.md",
-                mime="text/markdown",
-                use_container_width=True,
+            t_min, t_script, t_transcript, t_glossary = st.tabs(
+                ["議事録", "スクリプト", "文字起こし", "用語集"]
             )
-        with col2:
-            if st.button("🔄 新しい議事録", use_container_width=True):
-                for k, v in _DEFAULTS.items():
-                    st.session_state[k] = v
-                st.rerun()
 
-        st.divider()
+            with t_min:
+                if mins:
+                    _render_structured_minutes(mins, glossary)
+                elif markdown_text:
+                    with st.container(border=True):
+                        st.markdown(markdown_text)
+                else:
+                    st.info("議事録データがありません。")
 
-        # ── Result tabs ───────────────────────────────────────────────────────
-        t_min, t_script, t_transcript, t_glossary = st.tabs(
-            ["📋 議事録", "📝 スクリプト", "🔤 文字起こし", "📚 用語集"]
+            with t_script:
+                s = script.get("script", "")
+                if s:
+                    st.text_area("会議スクリプト", value=s, height=180, disabled=True)
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        st.write("**参加者**")
+                        for p in script.get("participants", []):
+                            st.markdown(f"- {p}")
+                    with col_b:
+                        st.write("**議題**")
+                        for a in script.get("agenda_items", []):
+                            st.markdown(f"- {a}")
+                else:
+                    st.info("スクリプトデータがありません。")
+
+            with t_transcript:
+                tr = cu.get("raw_transcript", "")
+                if tr:
+                    st.text_area("生の文字起こし", value=tr, height=180, disabled=True)
+                    meta_cols = st.columns(3)
+                    with meta_cols[0]:
+                        st.metric("話者数", len(cu.get("speakers", [])))
+                    with meta_cols[1]:
+                        dur = cu.get("duration_seconds")
+                        st.metric("録音時間", f"{dur:.0f} 秒" if dur else "—")
+                    with meta_cols[2]:
+                        st.metric("言語", cu.get("language") or "—")
+                    if cu.get("speakers"):
+                        st.write("**話者:** " + "、".join(cu["speakers"]))
+                    if cu.get("topics"):
+                        st.write("**主なトピック:** " + "、".join(cu["topics"]))
+                else:
+                    st.info("文字起こしデータがありません。")
+
+            with t_glossary:
+                if glossary:
+                    import pandas as pd
+                    df = pd.DataFrame(glossary, columns=["term", "definition"])
+                    df.columns = ["用語", "定義"]
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("議事録中に専門用語は検出されませんでした。")
+
+    # ── Right: agent detail (always visible) ──────────────────────────────────
+    with col_right:
+        render_agent_detail(
+            result,
+            input_mode=st.session_state.get("input_mode", "audio"),
+            height=_vh(44),
         )
 
-        with t_min:
-            if mins:
-                _render_structured_minutes(mins, glossary)
-            elif markdown_text:
-                with st.container(border=True):
-                    st.markdown(markdown_text)
-            else:
-                st.info("議事録データがありません。")
-
-        with t_script:
-            s = script.get("script", "")
-            if s:
-                st.text_area("会議スクリプト", value=s, height=400, disabled=True)
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    st.write("**参加者**")
-                    for p in script.get("participants", []):
-                        st.markdown(f"- {p}")
-                with col_b:
-                    st.write("**議題**")
-                    for a in script.get("agenda_items", []):
-                        st.markdown(f"- {a}")
-            else:
-                st.info("スクリプトデータがありません。")
-
-        with t_transcript:
-            tr = cu.get("raw_transcript", "")
-            if tr:
-                st.text_area("生の文字起こし", value=tr, height=400, disabled=True)
-                meta_cols = st.columns(3)
-                with meta_cols[0]:
-                    st.metric("話者数", len(cu.get("speakers", [])))
-                with meta_cols[1]:
-                    dur = cu.get("duration_seconds")
-                    st.metric("録音時間", f"{dur:.0f} 秒" if dur else "—")
-                with meta_cols[2]:
-                    st.metric("言語", cu.get("language") or "—")
-                if cu.get("speakers"):
-                    st.write("**話者:** " + "、".join(cu["speakers"]))
-                if cu.get("topics"):
-                    st.write("**主なトピック:** " + "、".join(cu["topics"]))
-            else:
-                st.info("文字起こしデータがありません。")
-
-        with t_glossary:
-            if glossary:
-                import pandas as pd
-                df = pd.DataFrame(glossary, columns=["term", "definition"])
-                df.columns = ["用語", "定義"]
-                st.dataframe(df, use_container_width=True, hide_index=True)
-            else:
-                st.info("議事録中に専門用語は検出されませんでした。")
-
-    if col_detail is not None:
-        with col_detail:
-            render_agent_detail(result, input_mode=st.session_state.get("input_mode", "audio"))
+    # ── History (lower half) ──────────────────────────────────────────────────
+    _render_history_section()
 
 
 def page_error() -> None:
-    render_header()
-    st.error(f"⚠️ エラー: {st.session_state.error_msg}")
-    if st.button("🔄 やり直す", type="primary"):
+    render_header(status="エラー")
+    st.error(f"エラー: {st.session_state.error_msg}")
+    if st.button("やり直す", type="primary"):
         for k, v in _DEFAULTS.items():
             st.session_state[k] = v
         st.rerun()
@@ -1079,9 +1338,8 @@ def main() -> None:
 
     # ── Footer ────────────────────────────────────────────────────────────────
     st.markdown(
-        "<hr style='margin-top:40px'>"
-        "<p style='text-align:center;color:#a19f9d;font-size:.82rem'>"
-        "Meeting Minutes Agent — Azure AI Content Understanding × Azure OpenAI × Container Apps"
+        "<p style='text-align:center;color:#a19f9d;font-size:.78rem;margin-top:8px'>"
+        "Meeting Minutes Agent — Azure AI × Azure OpenAI × Container Apps"
         "</p>",
         unsafe_allow_html=True,
     )

@@ -1,6 +1,6 @@
 # Meeting Minutes Agent — 運用ガイド
 
-> **最終更新日**: 2026-05-11
+> **最終更新日**: 2026-05-12
 
 ---
 
@@ -82,6 +82,7 @@ ContainerAppConsoleLogs_CL
 - Managed Identity に `Cognitive Services User` ロールがあるか確認
 - 音声ファイルが対応形式 (wav/mp3/mp4/m4a/ogg/webm/flac) か確認
 - ファイルサイズが 100MB 以下か確認
+- Batch モードの場合: AI Services MI に `Storage Blob Data Reader` ロールがあるか確認（Batch API が Blob から音声を読み取るため）
 
 #### 「Blob Storage にアクセスできない」
 
@@ -170,5 +171,5 @@ az storage blob upload \
 | Speech Phrase List | Fast Transcription API は `phraseList` 未対応。用語正規化は LLM エージェントに委任 |
 | 音声正規化 | pydub (ffmpeg) で 16 kHz / 16-bit / mono WAV にリサンプル。失敗時はオリジナルで送信 |
 | Storage コンテナ作成 | `Storage Blob Data Contributor` ロールではコンテナ作成不可。新規コンテナは Terraform で宣言 |
-| 長時間音声 | Fast Transcription タイムアウトは httpx で最大 30 分 (read=1800s) |
-| Batch API | AIServices kind では Batch Transcription API が 404 を返す場合がある |
+| 長時間音声 | Fast Transcription タイムアウトは httpx で最大 30 分 (read=1800s)。Batch はポーリング最大 1800s |
+| Batch Transcription | AIServices kind のアカウントで動作確認済み。API バージョン `2025-10-15` + `:submit` パスが必要 |

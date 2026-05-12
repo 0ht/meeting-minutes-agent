@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import logging
 from functools import lru_cache
-from typing import Optional
 
 from openai import AsyncAzureOpenAI, AsyncOpenAI
 from azure.identity.aio import DefaultAzureCredential, get_bearer_token_provider

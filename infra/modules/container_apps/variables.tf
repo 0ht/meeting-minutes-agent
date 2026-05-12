@@ -4,19 +4,10 @@ variable "app_name"                 { type = string }
 variable "environment"              { type = string }
 variable "container_apps_subnet_id" { type = string }
 variable "acr_login_server"         { type = string }
-variable "acr_username" {
-  type      = string
-  sensitive = true
+variable "acr_id" {
+  description = "ACR resource ID for AcrPull role assignment"
+  type        = string
 }
-variable "acr_password" {
-  type      = string
-  sensitive = true
-}
-
-# Backend image (e.g. myregistry.azurecr.io/backend:latest)
-variable "backend_image"  { type = string }
-# Frontend image (e.g. myregistry.azurecr.io/frontend:latest)
-variable "frontend_image" { type = string }
 
 # Backend environment variables (secrets are passed separately)
 variable "backend_env" {
