@@ -86,6 +86,10 @@ resource "azurerm_private_dns_zone_virtual_network_link" "cognitive" {
   virtual_network_id    = var.vnet_id
 }
 
+# NOTE: 現在の本番構成では Foundry プロジェクトエンドポイント
+# (*.services.ai.azure.com) のみ使用しており *.openai.azure.com への
+# 通信は発生しない。レガシーフォールバック（AZURE_OPENAI_ENDPOINT 直接
+# 接続）に備えて防御的に残している。コスト影響なし。
 resource "azurerm_private_dns_zone" "openai" {
   name                = "privatelink.openai.azure.com"
   resource_group_name = var.resource_group_name

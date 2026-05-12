@@ -57,8 +57,7 @@ infra/terraform.tfstate.*
 infra/*.tfvars
 !infra/terraform.tfvars.example
 infra/.terraform.tfstate.lock.info
-infra/tfplan
-infra/tfplan.*
+infra/tfplan*
 infra/crash.log
 
 # ── Docker ───────────────────────────────────────────────────────────────────

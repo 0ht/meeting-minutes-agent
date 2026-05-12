@@ -77,7 +77,7 @@
 - **Frontend**: 外部イングレス（パブリック HTTPS）— ユーザーがブラウザからアクセス
 - **Backend**: 内部イングレスのみ — VNet 内からのみ到達可能（インターネット非公開）
 - **Frontend → Backend**: `https://{backend-name}.internal.{env-domain}` で VNet 内部通信
-- **Backend → AI Services (Foundry)**: `public_network_access_enabled = false` のため、Private Endpoint (`pe-cognitive-*`) + Private DNS Zone (`privatelink.cognitiveservices.azure.com` / `privatelink.openai.azure.com`) 経由。Speech Fast/Batch Transcription・GPT Chat Completions・Foundry Agents すべてこの経路を使用
+- **Backend → AI Services (Foundry)**: `public_network_access_enabled = false` のため、Private Endpoint (`pe-cognitive-*`) + Private DNS Zone (`privatelink.cognitiveservices.azure.com` / `privatelink.openai.azure.com` / `privatelink.services.ai.azure.com`) 経由。Speech Fast/Batch Transcription・GPT Chat Completions・Foundry Agents すべてこの経路を使用
 - **Backend → Blob Storage**: `network_rules { default_action = "Deny", bypass = ["AzureServices"] }` のため、Private Endpoint (`pe-blob-*`) + Private DNS Zone (`privatelink.blob.core.windows.net`) 経由
 - **Container Apps → ACR**: `public_network_access_enabled = false` のため、Private Endpoint (`pe-acr-*`) + Private DNS Zone (`privatelink.azurecr.io`) 経由でイメージプル
 - **Container Apps → Log Analytics**: Azure バックボーン内で完結（パブリックインターネット不経由）
@@ -113,6 +113,7 @@ flowchart TB
         PDNS_BLOB["🔗 privatelink.blob.core.windows.net"]
         PDNS_COG["🔗 privatelink.cognitiveservices.azure.com"]
         PDNS_OAI["🔗 privatelink.openai.azure.com"]
+        PDNS_AI_SVC["🔗 privatelink.services.ai.azure.com"]
         PDNS_ACR["🔗 privatelink.azurecr.io"]
     end
 
@@ -128,6 +129,7 @@ flowchart TB
     PE_BLOB -."A record".-> PDNS_BLOB
     PE_COG -."A record".-> PDNS_COG
     PE_COG -."A record".-> PDNS_OAI
+    PE_COG -."A record".-> PDNS_AI_SVC
     PE_ACR -."A record".-> PDNS_ACR
     PE_BLOB --> ST
     PE_COG --> AIF
@@ -408,6 +410,7 @@ infra/
 | Private DNS Zone | `privatelink.blob.core.windows.net` | Storage PE の名前解決 |
 | Private DNS Zone | `privatelink.cognitiveservices.azure.com` | AI Services PE の名前解決 |
 | Private DNS Zone | `privatelink.openai.azure.com` | OpenAI PE の名前解決 |
+| Private DNS Zone | `privatelink.services.ai.azure.com` | AI Foundry プロジェクトエンドポイントの名前解決 |
 | Private DNS Zone | `privatelink.azurecr.io` | ACR PE の名前解決 |
 | Container Registry | `acr{app}{env}` | Premium SKU、Private Endpoint 経由でイメージプル |
 | Log Analytics | `law-{app}-{env}` | ログ集約 |
