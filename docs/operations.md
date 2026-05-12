@@ -141,7 +141,9 @@ ContainerAppConsoleLogs_CL
 
 ### 3.3 Foundry エージェント更新
 
-instructions やツール定義を変更した場合:
+`azd deploy` 実行時に `postdeploy` フックで自動登録される。instructions やツール定義を変更した場合は `azd deploy` で反映される。
+
+手動で再実行する場合:
 
 ```bash
 export FOUNDRY_PROJECT_ENDPOINT=<endpoint>
@@ -150,13 +152,18 @@ python backend/scripts/register_foundry_agents.py
 
 ### 3.4 用語辞書更新
 
+`azd deploy` 実行時に `postdeploy` フックで `backend/app/data/terminology.json` が自動アップロードされる。
+
+手動で再実行する場合:
+
 ```bash
 az storage blob upload \
   --account-name <storage-account> \
   --container-name terms \
   --name terminology.json \
   --file backend/app/data/terminology.json \
-  --auth-mode login
+  --auth-mode login \
+  --overwrite
 ```
 
 キャッシュ TTL 後に自動反映（デフォルト 5 分）。

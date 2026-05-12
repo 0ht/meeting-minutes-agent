@@ -32,8 +32,8 @@ azd up
 | → `preprovision` フック | Container Apps の存在チェック（初回は false → プレースホルダーイメージで作成） |
 | → `postprovision` フック | Container Apps に MI ベースの ACR レジストリを設定 (`az containerapp registry set`) |
 | `azd deploy` | Backend / Frontend の Docker イメージを ACR リモートビルド＆Container Apps にデプロイ |
-| → `predeploy` フック | ACR のパブリックアクセスを一時的に有効化（`az acr build` がデータプレーンに必要なため） |
-| → `postdeploy` フック | ACR のパブリックアクセスを再度無効化（Private Endpoint のみに復元） |
+| → `predeploy` フック | ACR のパブリックアクセスを一時的に有効化（`az acr build` がデータプレーンに必要なため）+ 伝播待ちリトライ |
+| → `postdeploy` フック | ACR のパブリックアクセスを再度無効化 + Foundry Agent 登録 + 用語辞書アップロード |
 
 初回実行時、azd が環境名やサブスクリプション・リージョンを対話的に質問します。`terraform.tfvars` は azd が自動的に読み込みます。
 
