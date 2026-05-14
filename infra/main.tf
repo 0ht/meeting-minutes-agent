@@ -136,11 +136,11 @@ resource "azurerm_role_assignment" "frontend_blob_contributor" {
 }
 
 # ── RBAC: Backend Managed Identity → Foundry account ─────────────────────────
-# "Azure AI User" grants data-plane access to the Foundry project + model
+# "Azure AI Developer" grants data-plane access to the Foundry project + model
 # deployments (chat completions, agents, etc.) via DefaultAzureCredential.
 resource "azurerm_role_assignment" "backend_foundry_ai_user" {
   scope                = module.ai_services.foundry_account_id
-  role_definition_name = "Azure AI User"
+  role_definition_name = "Azure AI Developer"
   principal_id         = module.container_apps.backend_principal_id
   principal_type       = "ServicePrincipal"
 }
